@@ -20,7 +20,7 @@ export const q = createQueryFacade<DataModel>(db);
 
 const enriched = await q.users.byClerkId('clerk-id').with((user) => ({
   tags: q.tags.byOwnerId(user._id).many(),
-  score: compute(db, async (db) => {
+  score: compute(async () => {
     const taps = await createQueryFacade<DataModel>(db).taps.byUserId(user._id).many();
     return taps.length;
   }),

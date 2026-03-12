@@ -1125,11 +1125,10 @@ export function createQueryFacade<DataModel extends GenericDataModel>(
   ) as QueryFacade<DataModel>;
 }
 
-export function compute<DataModel extends GenericDataModel, Output = unknown>(
-  db: GenericDatabaseReader<DataModel>,
-  load: (db: GenericDatabaseReader<DataModel>) => Promise<Output> | Output,
+export function compute<Output = unknown>(
+  load: () => Promise<Output> | Output,
 ): QueryNode<Output> {
-  return createQueryNode(async () => await load(db));
+  return createQueryNode(async () => await load());
 }
 
 async function queryUniqueByIndex<DataModel extends GenericDataModel>(

@@ -109,9 +109,8 @@ class FakeDb {
 
 describe('convex-query type surface', () => {
   test('infers indexed and expanded queries', () => {
-    const q = createQueryFacade<DataModel>(
-      null as never as GenericDatabaseReader<DataModel>,
-    );
+    const qDb = null as never as GenericDatabaseReader<DataModel>;
+    const q = createQueryFacade<DataModel>(qDb);
 
     const foundUser = q.users.byClerkId('clerk-1').with((user) => ({
       tags: q.tags.byOwnerId(user._id).many(),
@@ -134,13 +133,10 @@ describe('convex-query type surface', () => {
       NonNullable<NonNullable<Awaited<typeof maybeTag>>['tapped']>['tap']['userId']
     >().toEqualTypeOf<DataModel['taps']['document']['userId']>();
 
-    const maybeScore = compute(
-      null as never as GenericDatabaseReader<DataModel>,
-      async (db) => {
-        const scoreQ: QueryFacade<DataModel> = createQueryFacade(db);
-        return (await scoreQ.tags.many()).length;
-      },
-    );
+    const maybeScore = compute(async () => {
+      const scoreQ: QueryFacade<DataModel> = createQueryFacade(qDb);
+      return (await scoreQ.tags.many()).length;
+    });
 
     expectTypeOf<Awaited<typeof maybeScore>>().toEqualTypeOf<number>();
 
@@ -186,7 +182,7 @@ describe('convex-query runtime behavior', () => {
     const q = createQueryFacade<DataModel>(ctx.db);
     const user = await q.users.byClerkId('clerk-1').with((foundUser) => ({
       tags: q.tags.byOwnerId(foundUser._id).many(),
-      tagCount: compute(ctx.db, async () => {
+      tagCount: compute(async () => {
         const tags = await q.tags.byOwnerId(foundUser._id).many();
         return tags.length;
       }),
