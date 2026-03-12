@@ -142,8 +142,28 @@ pnpm add @davidtkramer/convex-relations convex
 
 ## Quick Start
 
-Most apps expose the facade on `ctx.q` through a small wrapper around Convex's
-query/mutation helpers. Once you do that, usage looks like this:
+Most apps expose the facade on `ctx.q` through `convex-helpers` custom function
+wrappers. A minimal setup looks like this:
+
+```ts
+// convex/lib/functions.ts
+import {
+  customCtx,
+  customQuery,
+} from "convex-helpers/server/customFunctions";
+import { query as baseQuery } from "./_generated/server";
+import type { DataModel } from "./_generated/dataModel";
+import { createQueryFacade } from "@davidtkramer/convex-relations";
+
+export const query = customQuery(
+  baseQuery,
+  customCtx((ctx: { db: any }) => ({
+    q: createQueryFacade<DataModel>(ctx.db),
+  })),
+);
+```
+
+Once you do that, usage looks like this:
 
 ```ts
 const post = await ctx.q.posts
@@ -154,8 +174,6 @@ const post = await ctx.q.posts
   }))
   .unique();
 ```
-
-If you want to create the facade directly from a `db`, see [`createQueryFacade<DataModel>(db)`](#createqueryfacadedatamodeldb).
 
 ## Core Concepts
 
@@ -169,37 +187,37 @@ await ctx.q.authors.bySlug("ada-lovelace").unique();
 await ctx.q.comments.byPostId(postId).order("desc").take(20);
 ```
 
-### Thenable query nodes
+### Indexes become methods
 
-Terminal methods return thenables, so you can `await` them directly:
-
-```ts
-const post = await ctx.q.posts.bySlug("hello-world").unique();
-const maybeAuthor = await ctx.q.authors.findOrNull(authorId);
-```
-
-### Pre-terminal composition
-
-Expansion must happen before the terminal method:
+For example, imagine these index definitions:
 
 ```ts
-const post = await ctx.q.posts
-  .bySlug("hello-world")
-  .with((post) => ({
-    author: ctx.q.authors.find(post.authorId),
-  }))
-  .unique();
-```
+authors: defineTable({
+  slug: v.string(),
+  name: v.string(),
+}).index("bySlug", ["slug"]);
 
-This is intentionally invalid:
+comments: defineTable({
+  postId: v.id("posts"),
+  authorId: v.id("authors"),
+  status: v.union(v.literal("pending"), v.literal("approved")),
+  body: v.string(),
+})
+  .index("byPostId", ["postId"])
+  .index("byPostIdAndStatus", ["postId", "status"]);
+```
 
 ```ts
-// @ts-expect-error
-q.posts
-  .bySlug("hello-world")
-  .unique()
-  .with(() => ({}));
+const author = await ctx.q.authors.bySlug("ada-lovelace").unique();
+const comments = await ctx.q.comments.byPostId(postId).many();
+const approvedComments = await ctx.q.comments
+  .byPostIdAndStatus({ postId, status: "approved" })
+  .many();
 ```
+
+Single-field indexes accept a scalar. Compound indexes accept an object that
+matches a leading slice of the index definition. Zero-argument calls give you
+the indexed range so you can filter, sort, paginate, or take a subset.
 
 ## API
 
@@ -471,11 +489,10 @@ The second stage waits for the first stage, because it depends on fields added e
 - Use `take(...)` or `paginate(...)` instead of `many()` on large collections
 - Use indexed entrypoints whenever possible
 - Use `.in(...)` when you already have a set of ids or indexed values
-- Be careful with wide fan-out expansions on large result sets, because per-item parallelism can create a lot of concurrent work
 
 ## Comparison to `convex-helpers/server/relationships`
 
-If you started from Convex relationship helpers like `getOneFrom`, `getManyFrom`, or `getManyVia`, this library aims to provide the same kind of relational navigation with better composition and much stronger typing.
+If you started from Convex relationship helpers like `getOneFrom`, `getManyFrom`, or `getManyVia`, this library aims to provide the same kind of relational navigation with better composition.
 
 This:
 
