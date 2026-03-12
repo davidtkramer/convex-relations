@@ -1,6 +1,7 @@
-# `@davidtkramer/convex-relations`
-
-Typed relations and query composition for Convex backends.
+<div align="center">
+  <p style="font-size: 64px;">🌿</p>
+  <h1>Convex Relations</h1>
+</div>
 
 `convex-relations` is a server-side query facade for Convex. It lets you write
 data loading code as a typed result tree instead of manually coordinating
