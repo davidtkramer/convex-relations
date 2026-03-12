@@ -2,48 +2,36 @@
 
 Typed relations and query composition for Convex backends.
 
-`convex-relations` is a server-side query facade for Convex. It gives you typed
-table namespaces from your generated `DataModel`, strongly typed index lookups,
-relation expansion with `with(...)`, join-table traversal with `via(...)`,
-batch loading with `.in(...)`, and arbitrary computed fields with `compute(...)`.
+`convex-relations` is a server-side query facade for Convex. It gives you:
 
-It is designed for Convex query and mutation code, not frontend query clients.
-
-## Table of Contents
-
-- [Installation](#installation)
-- [Example](#example)
-- [Equivalent Convex Code](#equivalent-convex-code)
-- [Quick Start](#quick-start)
-- [Core Concepts](#core-concepts)
-- [API](#api)
-- [Table Access Patterns](#table-access-patterns)
-- [Relation Expansion with `with(...)`](#relation-expansion-with-with)
-- [Join Table Traversal with `via(...)`](#join-table-traversal-with-via)
-- [Terminals](#terminals)
-- [Error Semantics](#error-semantics)
-- [Performance Characteristics](#performance-characteristics)
-- [Comparison to `convex-helpers/server/relationships`](#comparison-to-convex-helpersserverrelationships)
-- [Type Notes](#type-notes)
-- [License](#license)
-
-## Installation
-
-```bash
-npm install @davidtkramer/convex-relations
-```
-
-```bash
-pnpm add @davidtkramer/convex-relations
-```
-
-```bash
-bun add @davidtkramer/convex-relations
-```
-
-```bash
-yarn add @davidtkramer/convex-relations
-```
+- typed table namespaces from your generated `DataModel`
+  ```ts
+  ctx.q.posts.many();
+  ```
+- indexes as first-class query methods
+  ```ts
+  ctx.q.posts.bySlug("hello-world").unique();
+  ```
+- relation expansion with `with(...)`
+  ```ts
+  ctx.q.posts
+    .find(postId)
+    .with((post) => ({ author: ctx.q.authors.find(post.authorId) }));
+  ```
+- join-table traversal with `via(...)`
+  ```ts
+  ctx.q.categories.via("postCategories", "categoryId").byPostId(postId).many();
+  ```
+- batch loading with `.in(...)`
+  ```ts
+  ctx.q.posts.find.in(postIds);
+  ```
+- arbitrary computed fields with `compute(...)`
+  ```ts
+  ctx.q.posts
+    .find(postId)
+    .with((post) => ({ summary: compute(() => summarize(post.body)) }));
+  ```
 
 ## Example
 
@@ -152,6 +140,40 @@ That works, but you are responsible for:
 - assembling the final tree shape yourself for API responses
 - keeping the whole thing type-safe as it grows
 
+## Table of Contents
+
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Core Concepts](#core-concepts)
+- [API](#api)
+- [Table Access Patterns](#table-access-patterns)
+- [Relation Expansion with `with(...)`](#relation-expansion-with-with)
+- [Join Table Traversal with `via(...)`](#join-table-traversal-with-via)
+- [Terminals](#terminals)
+- [Error Semantics](#error-semantics)
+- [Performance Characteristics](#performance-characteristics)
+- [Comparison to `convex-helpers/server/relationships`](#comparison-to-convex-helpersserverrelationships)
+- [Type Notes](#type-notes)
+- [License](#license)
+
+## Installation
+
+```bash
+npm install @davidtkramer/convex-relations
+```
+
+```bash
+pnpm add @davidtkramer/convex-relations
+```
+
+```bash
+bun add @davidtkramer/convex-relations
+```
+
+```bash
+yarn add @davidtkramer/convex-relations
+```
+
 ## Quick Start
 
 Most apps expose the facade on `ctx.q` through `convex-helpers` custom function
@@ -227,6 +249,40 @@ const approvedComments = await ctx.q.comments
 Single-field indexes accept a scalar. Compound indexes accept an object that
 matches a leading slice of the index definition. Zero-argument calls give you
 the indexed range so you can filter, sort, paginate, or take a subset.
+
+### `with(...)` builds nested result shapes
+
+`with(...)` lets you attach additional fields to every document in a query. The
+callback receives the current document and returns an object whose values are
+other query nodes or `compute(...)` calls.
+
+```ts
+const post = await ctx.q.posts
+  .bySlug("hello-world")
+  .with((post) => ({
+    author: ctx.q.authors.find(post.authorId),
+    comments: ctx.q.comments.byPostId(post._id).take(10),
+  }))
+  .unique();
+```
+
+That returns a single object shaped like:
+
+```ts
+{
+  ...post,
+  author,
+  comments,
+}
+```
+
+This is the core idea behind the library: compose the data you want as a tree,
+and `convex-relations` resolves and assembles that tree for you.
+
+Within a single `with(...)`, sibling fields are resolved in parallel. If you
+attach both `author` and `comments`, those branches start loading at the same
+time. Nested `with(...)` calls preserve that behavior recursively, so each level
+of the result tree parallelizes across its sibling fields.
 
 ## API
 
