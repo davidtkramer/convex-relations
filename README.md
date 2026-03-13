@@ -126,8 +126,6 @@ That works, but you are responsible for:
 - [Error Semantics](#error-semantics)
 - [Performance Characteristics](#performance-characteristics)
 - [Comparison to `convex-helpers/server/relationships`](#comparison-to-convex-helpersserverrelationships)
-- [Type Notes](#type-notes)
-- [License](#license)
 
 ## Installation
 
@@ -157,12 +155,13 @@ wrappers. A minimal setup looks like this:
 import { customCtx, customQuery } from "convex-helpers/server/customFunctions";
 import { query as baseQuery } from "./_generated/server";
 import type { DataModel } from "./_generated/dataModel";
+import schema from "../schema";
 import { createQueryFacade } from "@davidtkramer/convex-relations";
 
 export const query = customQuery(
   baseQuery,
   customCtx((ctx: { db: any }) => ({
-    q: createQueryFacade<DataModel>(ctx.db),
+    q: createQueryFacade<DataModel>(ctx.db, schema),
   })),
 );
 ```
@@ -223,6 +222,10 @@ Single-field indexes accept a scalar. Compound indexes accept positional
 arguments in index order. Zero-argument calls give you the indexed range so you
 can filter, sort, paginate, or take a subset.
 
+Because shorthand index methods like `.bySlug("...")` and
+`.byPostIdAndStatus(...)` need the real indexed field names at runtime,
+`createQueryFacade(...)` must be constructed with your Convex schema.
+
 ### `with(...)` builds nested result shapes
 
 `with(...)` lets you attach additional fields to every document in a query. The
@@ -263,15 +266,18 @@ of the result tree parallelizes across its sibling fields.
 
 ## API
 
-### `createQueryFacade<DataModel>(db)`
+### `createQueryFacade<DataModel>(db, schema)`
 
-Creates a typed facade over your Convex `db`.
+Creates a typed facade over your Convex `db`. Pass the runtime schema from
+`defineSchema(...)` so indexed shorthand methods can map scalar and tuple
+arguments onto the correct Convex index fields.
 
 ```ts
 import { createQueryFacade } from "@davidtkramer/convex-relations";
 import type { DataModel } from "./_generated/dataModel";
+import schema from "../schema";
 
-const q = createQueryFacade<DataModel>(ctx.db);
+const q = createQueryFacade<DataModel>(ctx.db, schema);
 ```
 
 ### `with(..., { defer })`
@@ -591,15 +597,3 @@ const categories = await getManyVia(
 ```
 
 but also composes naturally with `with(...)`, `take(...)`, `firstOrNull()`, and typed nested traversal.
-
-## Type Notes
-
-- The facade is generic over your generated `DataModel`
-- Table names, `_id` types, index names, and compound index prefixes are inferred
-- Invalid table names and invalid index names are rejected at compile time
-- Scalar shorthand is only allowed for single-field indexes
-- Compound indexes use leading positional arguments
-
-## License
-
-MIT
