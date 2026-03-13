@@ -3,7 +3,7 @@ import type {
   GenericDatabaseReader,
 } from "convex/server";
 import { assertType, describe, expectTypeOf, test } from "vitest";
-import { compute, createQueryFacade, type QueryFacade } from "../src/index";
+import { createQueryFacade } from "../src/index";
 import schema from "./schema";
 
 type DataModel = DataModelFromSchemaDefinition<typeof schema>;
@@ -140,7 +140,7 @@ describe("convex-relations type surface", () => {
   test("through builders support collection sources, source nodes, and source composition", () => {
     const postTags = q.tags
       .through(q.postsTags.byPostId(postId), "tagId")
-      .withSource("link")
+      .with((tag, { source }) => ({ link: source }))
       .many();
     assertType<TagId>(null as any as Awaited<typeof postTags>[number]["_id"]);
     expectTypeOf<Awaited<typeof postTags>[number]["link"]>().toEqualTypeOf<
@@ -149,7 +149,7 @@ describe("convex-relations type surface", () => {
 
     const taggedPosts = q.posts
       .through(q.postsTags.byTagId(tagId), "postId")
-      .withSource("link")
+      .with((post, { source }) => ({ link: source }))
       .many();
     expectTypeOf<Awaited<typeof taggedPosts>[number]["link"]>().toEqualTypeOf<
       DataModel["postsTags"]["document"]
@@ -157,8 +157,10 @@ describe("convex-relations type surface", () => {
 
     const expandedThroughFirst = q.posts
       .through(q.postsTags.byTagId(tagId), "postId")
-      .withSource("link")
-      .with((post) => ({ author: q.authors.find(post.authorId) }))
+      .with((post, { source }) => ({
+        link: source,
+        author: q.authors.find(post.authorId),
+      }))
       .first();
     expectTypeOf<Awaited<typeof expandedThroughFirst>["link"]>().toEqualTypeOf<
       DataModel["postsTags"]["document"]
@@ -169,7 +171,7 @@ describe("convex-relations type surface", () => {
 
     const expandedThroughUniqueOrNull = q.tags
       .through(q.postsTags.byPostIdAndTagId(postId, tagId), "tagId")
-      .withSource("link")
+      .with((tag, { source }) => ({ link: source }))
       .uniqueOrNull();
     expectTypeOf<
       NonNullable<Awaited<typeof expandedThroughUniqueOrNull>>["link"]
@@ -200,8 +202,10 @@ describe("convex-relations type surface", () => {
 
     const throughSingleSource = q.authors
       .through(q.posts.bySlug("hello-world").unique(), "authorId")
-      .withSource("post")
-      .with((author) => ({ latestPost: q.posts.byAuthorId(author._id).firstOrNull() }));
+      .with((author, { source }) => ({
+        post: source,
+        latestPost: q.posts.byAuthorId(author._id).firstOrNull(),
+      }));
     expectTypeOf<Awaited<typeof throughSingleSource>["post"]>().toEqualTypeOf<
       DataModel["posts"]["document"]
     >();
@@ -211,19 +215,18 @@ describe("convex-relations type surface", () => {
 
     const throughManySource = q.tags
       .through(q.postsTags.byPostId(postId).take(1), "tagId")
-      .withSource("link");
+      .with((tag, { source }) => ({ link: source }));
     expectTypeOf<
       Awaited<typeof throughManySource>[number]["link"]
     >().toEqualTypeOf<DataModel["postsTags"]["document"]>();
   });
 
-  test("compute lifts arbitrary async work into the query tree", () => {
-    const maybeScore = compute(async () => {
-      const scoreQ: QueryFacade<DataModel> = createQueryFacade(db);
-      return (await scoreQ.posts.many()).length;
-    });
+  test("defer lifts arbitrary async work into the query tree", () => {
+    const postScore = q.posts.find(postId).with((post, { defer }) => ({
+      score: defer(async () => (await q.comments.byPostId(post._id).many()).length),
+    }));
 
-    expectTypeOf<Awaited<typeof maybeScore>>().toEqualTypeOf<number>();
+    expectTypeOf<Awaited<typeof postScore>["score"]>().toEqualTypeOf<number>();
   });
 
   test("rejects invalid query shapes and post-terminal chaining", () => {
@@ -269,15 +272,19 @@ describe("convex-relations type surface", () => {
     const throughManyTags = q.tags.through(q.postsTags.byPostId(postId), "tagId").many();
     // @ts-expect-error through many builders no longer accept with
     void throughManyTags.with(() => ({}));
-    void q.tags
-      .through(q.postsTags.byPostId(postId), "tagId")
-      .many()
-      // @ts-expect-error through many builders no longer accept withSource
-      .withSource("link");
     // @ts-expect-error invalid through target field for tags
     void q.tags.through(q.postsTags.byPostId(postId), "postId");
     // @ts-expect-error invalid through source field type for tags
     void q.tags.through(q.posts.bySlug("news"), "authorId");
+    void q.posts
+      // @ts-expect-error source context is only available on through builders
+      .with((post, { source }) => ({ source }));
+    void q.posts.with((post, { defer }) => ({
+      score: defer(async () => (await q.comments.byPostId(post._id).many()).length),
+    }));
+    void q.posts
+      // @ts-expect-error with callbacks must stay synchronous
+      .with(async (post) => ({ author: q.authors.find(post.authorId) }));
     // @ts-expect-error order stays on the source query passed to through
     void q.tags.through(q.postsTags.byPostId(postId), "tagId").order("desc");
     // @ts-expect-error filter stays on the source query passed to through

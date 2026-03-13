@@ -226,15 +226,19 @@ can filter, sort, paginate, or take a subset.
 ### `with(...)` builds nested result shapes
 
 `with(...)` lets you attach additional fields to every document in a query. The
-callback receives the current document and returns an object whose values are
-other query nodes or `compute(...)` calls.
+callback receives the current document plus a small helper context, and returns
+an object whose values can be plain sync values, other query nodes, or deferred
+work via `defer(...)`.
 
 ```ts
 const post = await ctx.q.posts
   .bySlug("hello-world")
-  .with((post) => ({
+  .with((post, { defer }) => ({
     author: ctx.q.authors.find(post.authorId),
     comments: ctx.q.comments.byPostId(post._id).take(10),
+    readingTimeMinutes: defer(() =>
+      Math.ceil(post.body.split(/\s+/).length / 200),
+    ),
   }))
   .unique();
 ```
@@ -270,15 +274,16 @@ import type { DataModel } from "./_generated/dataModel";
 const q = createQueryFacade<DataModel>(ctx.db);
 ```
 
-### `compute(load)`
+### `with(..., { defer })`
 
-Wraps arbitrary async or sync work so it can be used inside `with(...)`.
+The `with(...)` callback context includes `defer`, which wraps arbitrary async
+or sync work into the same lazy result tree as your relation queries.
 
 ```ts
 const post = await q.posts
   .bySlug("hello-world")
-  .with((post) => ({
-    readingTimeMinutes: compute(() =>
+  .with((post, { defer }) => ({
+    readingTimeMinutes: defer(() =>
       Math.ceil(post.body.split(/\s+/).length / 200),
     ),
   }))
@@ -364,10 +369,10 @@ Batch lookups skip missing rows.
 ```ts
 const post = await q.posts
   .bySlug("hello-world")
-  .with((post) => ({
+  .with((post, { defer }) => ({
     author: q.authors.find(post.authorId),
     comments: q.comments.byPostId(post._id).order("desc").take(10),
-    commentCount: compute(async () => {
+    commentCount: defer(async () => {
       const comments = await q.comments.byPostId(post._id).many();
       return comments.length;
     }),
@@ -407,12 +412,12 @@ const categories = await q.categories
 This is essentially syntactic sugar for "run the source query, extract ids from
 that field, then load the target rows for you."
 
-You can also attach the source row with `withSource(...)`:
+You can also attach the source row through the normal `with(...)` callback:
 
 ```ts
 const categories = await q.categories
   .through(q.postCategories.byPostId(postId).order("desc"), "categoryId")
-  .withSource("link")
+  .with((category, { source }) => ({ link: source }))
   .many();
 
 categories[0]?.link.postId;
@@ -427,7 +432,7 @@ timestamps.
 ```ts
 const author = await q.authors
   .through(q.posts.bySlug("hello-world"), "authorId")
-  .withSource("post")
+  .with((author, { source }) => ({ post: source }))
   .unique();
 
 author.post.slug;
@@ -445,12 +450,12 @@ const tags = await q.tags
       .take(10),
     "tagId",
   )
-  .withSource("link")
+  .with((tag, { source }) => ({ link: source }))
   .many();
 ```
 
 After `through(...)`, you can keep shaping the target result with `with(...)`
-and `withSource(...)`, then choose a terminal like `many()` or `first()`.
+and then choose a terminal like `many()` or `first()`.
 
 ## Terminals
 
@@ -517,10 +522,10 @@ const page = await q.posts.byAuthorId(authorId).paginate({
 Within a single `with(...)` stage, every field in the returned object runs in parallel.
 
 ```ts
-const post = await q.posts.find(postId).with((post) => ({
+const post = await q.posts.find(postId).with((post, { defer }) => ({
   author: q.authors.find(post.authorId),
   comments: q.comments.byPostId(post._id).take(10),
-  categoryCount: compute(async () => {
+  categoryCount: defer(async () => {
     const categories = await q.categories
       .through(q.postCategories.byPostId(post._id), "categoryId")
       .many();

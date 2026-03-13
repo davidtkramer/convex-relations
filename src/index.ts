@@ -161,11 +161,28 @@ type QueryPlanHandle<
   readonly _table: Table;
 };
 
-type WithSpec = Record<string, QueryNode<any>>;
-type WithBuilder<ParentItem, Spec extends WithSpec | undefined = WithSpec | undefined> = (
+type WithSpec = Record<string, unknown>;
+type DeferredBuilder = <Output>(
+  load: () => Promise<Output> | Output,
+) => QueryNode<Output>;
+type BaseWithContext = {
+  defer: DeferredBuilder;
+};
+type WithContext<SourceItem = never> = BaseWithContext &
+  ([SourceItem] extends [never] ? {} : { source: SourceItem });
+type WithBuilder<
+  ParentItem,
+  Context = BaseWithContext,
+  Spec extends WithSpec | undefined = WithSpec | undefined,
+> = (
   parent: ParentItem,
+  context: Context,
 ) => Spec;
-type AnyWithBuilder<ParentItem> = WithBuilder<ParentItem, WithSpec | undefined>;
+type AnyWithBuilder<ParentItem, Context = BaseWithContext> = WithBuilder<
+  ParentItem,
+  Context,
+  WithSpec | undefined
+>;
 type BuiltWithSpec<Builder> = Builder extends (...args: any[]) => infer Spec
   ? Spec
   : never;
@@ -177,12 +194,9 @@ type ExpandWith<ParentItem, Builder> = Simplify<
             infer Output
           >
             ? Output
-            : never;
+            : BuiltWithSpec<Builder>[K];
         }
       : {})
->;
-type AttachSource<ParentItem, SourceItem, SourceKey extends string> = Simplify<
-  ParentItem & { [K in SourceKey]: SourceItem }
 >;
 
 type PaginationOptions = {
@@ -273,12 +287,9 @@ type ThroughSourceField<
 }[Extract<keyof SourceItem, string>];
 type ManyThroughQueryBuilder<Item, SourceItem = unknown> = QueryNode<Item[]> &
   ThroughNodeHandle<SourceItem, 'many'> & {
-    with<Builder extends AnyWithBuilder<Item>>(
+    with<Builder extends AnyWithBuilder<Item, WithContext<SourceItem>>>(
       withBuilder: Builder,
     ): ManyThroughQueryBuilder<ExpandWith<Item, Builder>, SourceItem>;
-    withSource<const SourceKey extends string>(
-      key: SourceKey,
-    ): ManyThroughQueryBuilder<AttachSource<Item, SourceItem, SourceKey>, SourceItem>;
   };
 type SingleThroughQueryBuilder<
   Item,
@@ -286,12 +297,9 @@ type SingleThroughQueryBuilder<
   Nullable extends boolean,
 > = QueryNode<Nullable extends true ? Item | null : Item> &
   ThroughNodeHandle<SourceItem, Nullable extends true ? 'nullableSingle' : 'single'> & {
-    with<Builder extends AnyWithBuilder<Item>>(
+    with<Builder extends AnyWithBuilder<Item, WithContext<SourceItem>>>(
       withBuilder: Builder,
     ): SingleThroughQueryBuilder<ExpandWith<Item, Builder>, SourceItem, Nullable>;
-    withSource<const SourceKey extends string>(
-      key: SourceKey,
-    ): SingleThroughQueryBuilder<AttachSource<Item, SourceItem, SourceKey>, SourceItem, Nullable>;
   };
 
 type TableQueryFacade<
@@ -353,17 +361,9 @@ type ThroughQueryFacade<
   SourceItem,
   Item = AppDoc<DataModel, TargetTable>,
 > = {
-  with<Builder extends AnyWithBuilder<Item>>(
+  with<Builder extends AnyWithBuilder<Item, WithContext<SourceItem>>>(
     withBuilder: Builder,
   ): ThroughQueryFacade<DataModel, TargetTable, SourceItem, ExpandWith<Item, Builder>>;
-  withSource<const SourceKey extends string>(
-    key: SourceKey,
-  ): ThroughQueryFacade<
-    DataModel,
-    TargetTable,
-    SourceItem,
-    AttachSource<Item, SourceItem, SourceKey>
-  >;
   unique(): UniqueQueryBuilder<Item>;
   uniqueOrNull(): UniqueOrNullQueryBuilder<Item>;
   first(): FirstQueryBuilder<Item>;
@@ -455,15 +455,14 @@ type QuerySourcePlan =
 type QueryPlan = {
   source: QuerySourcePlan;
   modifiers: QueryModifier[];
-  expanders: AnyWithBuilder<any>[];
+  expanders: AnyWithBuilder<any, any>[];
 };
 
 type ThroughCollectionPlan = {
   targetTable: string;
   targetField: string;
   sourcePlan: QueryPlan;
-  expanders: AnyWithBuilder<any>[];
-  sourceKey?: string;
+  expanders: AnyWithBuilder<any, any>[];
 };
 
 type ThroughSourceNodePlan<
@@ -480,8 +479,7 @@ type ThroughSourceNodePlan<
         : SourceItem
   > &
     ThroughNodeHandle<SourceItem, Kind>;
-  expanders: AnyWithBuilder<any>[];
-  sourceKey?: string;
+  expanders: AnyWithBuilder<any, any>[];
 };
 
 type PlanRuntime<RawItem, Item> = {
@@ -513,15 +511,36 @@ function createQueryNode<Output>(executeRoot: () => Promise<Output>): QueryNode<
   };
 }
 
-async function expandDoc<ParentItem, Builder extends AnyWithBuilder<ParentItem>>(
+function createDeferredNode<Output>(
+  load: () => Promise<Output> | Output,
+): QueryNode<Output> {
+  return createQueryNode(async () => await load());
+}
+
+function isQueryNode(value: unknown): value is QueryNode<unknown> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    '_executeRoot' in value &&
+    typeof (value as { _executeRoot?: unknown })._executeRoot === 'function'
+  );
+}
+
+async function expandDoc<
+  ParentItem,
+  Context,
+  Builder extends AnyWithBuilder<ParentItem, Context>,
+>(
   parent: ParentItem,
   withBuilder: Builder,
+  context: Context,
 ) {
-  const spec = withBuilder(parent) ?? {};
+  const spec = withBuilder(parent, context) ?? {};
   const entries = await Promise.all(
-    Object.entries(spec).map(
-      async ([key, query]) => [key, await query._executeRoot()] as const,
-    ),
+    Object.entries(spec).map(async ([key, value]) => [
+      key,
+      isQueryNode(value) ? await value._executeRoot() : value,
+    ]),
   );
 
   return {
@@ -530,26 +549,39 @@ async function expandDoc<ParentItem, Builder extends AnyWithBuilder<ParentItem>>
   };
 }
 
-async function applyExpanders<Item>(
+async function applyExpanders<Item, Context = {}>(
   item: Item,
-  expanders: AnyWithBuilder<any>[],
+  expanders: AnyWithBuilder<any, any>[],
+  context: Context,
 ): Promise<Item> {
   let current: any = item;
   for (const expander of expanders) {
-    current = await expandDoc(current, expander);
+    current = await expandDoc(current, expander, context);
   }
   return current;
 }
 
-async function applyExpandersToMany<Item>(
+async function applyExpandersToMany<Item, Context = {}>(
   items: Item[],
-  expanders: AnyWithBuilder<any>[],
+  expanders: AnyWithBuilder<any, any>[],
+  getContext: (_item: Item, _index: number) => Context,
 ): Promise<Item[]> {
-  return await Promise.all(items.map((item) => applyExpanders(item, expanders)));
+  return await Promise.all(
+    items.map((item, index) => applyExpanders(item, expanders, getContext(item, index))),
+  );
 }
 
 function buildQuery(makeQuery: () => any, modifiers: QueryModifier[]) {
   return modifiers.reduce((query, modifier) => modifier(query), makeQuery());
+}
+
+function createWithContext<SourceItem = never>(
+  source?: SourceItem,
+): WithContext<SourceItem> {
+  return {
+    defer: createDeferredNode,
+    ...(source === undefined ? {} : { source }),
+  } as WithContext<SourceItem>;
 }
 
 function createPlan(source: QuerySourcePlan): QueryPlan {
@@ -567,7 +599,10 @@ function withModifier(plan: QueryPlan, modifier: QueryModifier): QueryPlan {
   };
 }
 
-function withExpander(plan: QueryPlan, expander: AnyWithBuilder<any>): QueryPlan {
+function withExpander(
+  plan: QueryPlan,
+  expander: AnyWithBuilder<any, any>,
+): QueryPlan {
   return {
     ...plan,
     expanders: [...plan.expanders, expander],
@@ -809,7 +844,7 @@ function createPlanRuntime<DataModel extends GenericDataModel>(
 async function decorateItem(plan: QueryPlan, rawItem: any, item: any) {
   let output = item;
   if (plan.expanders.length > 0) {
-    output = await applyExpanders(output, plan.expanders);
+    output = await applyExpanders(output, plan.expanders, createWithContext());
   }
   return output;
 }
@@ -817,7 +852,9 @@ async function decorateItem(plan: QueryPlan, rawItem: any, item: any) {
 async function decorateItems(plan: QueryPlan, rawItems: any[], items: any[]) {
   let output = items;
   if (plan.expanders.length > 0) {
-    output = await applyExpandersToMany(output, plan.expanders);
+    output = await applyExpandersToMany(output, plan.expanders, () =>
+      createWithContext(),
+    );
   }
   return output;
 }
@@ -959,30 +996,31 @@ function createManyQueryBuilder<Item>(
 }
 
 async function decorateThroughItem<Item, SourceItem>(
-  expanders: AnyWithBuilder<any>[],
-  sourceKey: string | undefined,
+  expanders: AnyWithBuilder<any, any>[],
   pair: ThroughPair<SourceItem, Item>,
 ) {
   let output: any = pair.target;
-  if (sourceKey) {
-    output = { ...output, [sourceKey]: pair.source };
-  }
   if (expanders.length > 0) {
-    output = await applyExpanders(output, expanders);
+    output = await applyExpanders(
+      output,
+      expanders,
+      createWithContext(pair.source),
+    );
   }
   return output;
 }
 
 async function decorateThroughItems<Item, SourceItem>(
-  expanders: AnyWithBuilder<any>[],
-  sourceKey: string | undefined,
+  expanders: AnyWithBuilder<any, any>[],
   pairs: ThroughPair<SourceItem, Item>[],
 ) {
-  let output: any[] = pairs.map(({ source, target }) =>
-    sourceKey ? { ...target, [sourceKey]: source } : target,
-  );
+  let output: any[] = pairs.map(({ target }) => target);
   if (expanders.length > 0) {
-    output = await applyExpandersToMany(output, expanders);
+    output = await applyExpandersToMany(
+      output,
+      expanders,
+      (_item, index) => createWithContext(pairs[index]!.source),
+    );
   }
   return output;
 }
@@ -997,7 +1035,7 @@ async function executeThroughCollectionMany<DataModel extends GenericDataModel>(
     plan.targetField,
     sourceItems,
   );
-  return await decorateThroughItems(plan.expanders, plan.sourceKey, pairs);
+  return await decorateThroughItems(plan.expanders, pairs);
 }
 
 async function executeThroughCollectionFirst<DataModel extends GenericDataModel>(
@@ -1017,7 +1055,7 @@ async function executeThroughCollectionFirst<DataModel extends GenericDataModel>
     throw new Error(`Could not find first ${plan.targetTable} through ${sourceDescription(plan.sourcePlan)}`);
   }
 
-  return await decorateThroughItem(plan.expanders, plan.sourceKey, pair);
+  return await decorateThroughItem(plan.expanders, pair);
 }
 
 async function executeThroughCollectionFirstOrNull<DataModel extends GenericDataModel>(
@@ -1034,7 +1072,7 @@ async function executeThroughCollectionFirstOrNull<DataModel extends GenericData
   )[0];
 
   return pair
-    ? await decorateThroughItem(plan.expanders, plan.sourceKey, pair)
+    ? await decorateThroughItem(plan.expanders, pair)
     : null;
 }
 
@@ -1058,7 +1096,7 @@ async function executeThroughCollectionUnique<DataModel extends GenericDataModel
     throw new Error(`Could not find ${plan.targetTable} through ${sourceDescription(plan.sourcePlan)}`);
   }
 
-  return await decorateThroughItem(plan.expanders, plan.sourceKey, pair);
+  return await decorateThroughItem(plan.expanders, pair);
 }
 
 async function executeThroughCollectionUniqueOrNull<DataModel extends GenericDataModel>(
@@ -1077,7 +1115,7 @@ async function executeThroughCollectionUniqueOrNull<DataModel extends GenericDat
   }
 
   return pairs[0]
-    ? await decorateThroughItem(plan.expanders, plan.sourceKey, pairs[0])
+    ? await decorateThroughItem(plan.expanders, pairs[0])
     : null;
 }
 
@@ -1094,7 +1132,7 @@ async function executeThroughManyNode<
     plan.targetField,
     sourceItems,
   );
-  return await decorateThroughItems(plan.expanders, plan.sourceKey, pairs);
+  return await decorateThroughItems(plan.expanders, pairs);
 }
 
 async function executeThroughSingleNode<
@@ -1129,26 +1167,16 @@ async function executeThroughSingleNode<
     throw new Error(`Could not find ${plan.targetTable} through source query`);
   }
 
-  return await decorateThroughItem(plan.expanders, plan.sourceKey, pair);
+  return await decorateThroughItem(plan.expanders, pair);
 }
 
 function withThroughCollectionExpander(
   plan: ThroughCollectionPlan,
-  expander: AnyWithBuilder<any>,
+  expander: AnyWithBuilder<any, any>,
 ): ThroughCollectionPlan {
   return {
     ...plan,
     expanders: [...plan.expanders, expander],
-  };
-}
-
-function withThroughCollectionSourceKey(
-  plan: ThroughCollectionPlan,
-  sourceKey: string,
-): ThroughCollectionPlan {
-  return {
-    ...plan,
-    sourceKey,
   };
 }
 
@@ -1157,24 +1185,11 @@ function withThroughNodeExpander<
   Kind extends ThroughSourceNodeKind,
 >(
   plan: ThroughSourceNodePlan<SourceItem, Kind>,
-  expander: AnyWithBuilder<any>,
+  expander: AnyWithBuilder<any, any>,
 ): ThroughSourceNodePlan<SourceItem, Kind> {
   return {
     ...plan,
     expanders: [...plan.expanders, expander],
-  };
-}
-
-function withThroughNodeSourceKey<
-  SourceItem,
-  Kind extends ThroughSourceNodeKind,
->(
-  plan: ThroughSourceNodePlan<SourceItem, Kind>,
-  sourceKey: string,
-): ThroughSourceNodePlan<SourceItem, Kind> {
-  return {
-    ...plan,
-    sourceKey,
   };
 }
 
@@ -1188,21 +1203,15 @@ function createThroughCollectionFacade<
   plan: ThroughCollectionPlan,
 ): ThroughQueryFacade<DataModel, TargetTable, SourceItem, Item> {
   return {
-    with<Builder extends AnyWithBuilder<Item>>(withBuilder: Builder) {
+    with<Builder extends AnyWithBuilder<Item, WithContext<SourceItem>>>(
+      withBuilder: Builder,
+    ) {
       return createThroughCollectionFacade<
         DataModel,
         TargetTable,
         SourceItem,
         ExpandWith<Item, Builder>
       >(db, withThroughCollectionExpander(plan, withBuilder));
-    },
-    withSource<const SourceKey extends string>(key: SourceKey) {
-      return createThroughCollectionFacade<
-        DataModel,
-        TargetTable,
-        SourceItem,
-        AttachSource<Item, SourceItem, SourceKey>
-      >(db, withThroughCollectionSourceKey(plan, key));
     },
     unique() {
       return createSingleQueryBuilder(
@@ -1247,18 +1256,13 @@ function createThroughManyQueryBuilder<
   return {
     ...createQueryNode(async () => await executeThroughManyNode(db, plan)),
     _throughSourceKind: 'many',
-    with<Builder extends AnyWithBuilder<Item>>(withBuilder: Builder) {
+    with<Builder extends AnyWithBuilder<Item, WithContext<SourceItem>>>(
+      withBuilder: Builder,
+    ) {
       return createThroughManyQueryBuilder<DataModel, SourceItem, ExpandWith<Item, Builder>>(
         db,
         withThroughNodeExpander(plan, withBuilder),
       );
-    },
-    withSource<const SourceKey extends string>(key: SourceKey) {
-      return createThroughManyQueryBuilder<
-        DataModel,
-        SourceItem,
-        AttachSource<Item, SourceItem, SourceKey>
-      >(db, withThroughNodeSourceKey(plan, key));
     },
   } as ManyThroughQueryBuilder<Item, SourceItem>;
 }
@@ -1279,21 +1283,15 @@ function createThroughSingleQueryBuilder<
   return {
     ...createQueryNode(async () => await executeThroughSingleNode(db, plan, nullable)),
     _throughSourceKind: nullable ? 'nullableSingle' : 'single',
-    with<Builder extends AnyWithBuilder<Item>>(withBuilder: Builder) {
+    with<Builder extends AnyWithBuilder<Item, WithContext<SourceItem>>>(
+      withBuilder: Builder,
+    ) {
       return createThroughSingleQueryBuilder<
         DataModel,
         SourceItem,
         ExpandWith<Item, Builder>,
         Nullable
       >(db, withThroughNodeExpander(plan, withBuilder), nullable);
-    },
-    withSource<const SourceKey extends string>(key: SourceKey) {
-      return createThroughSingleQueryBuilder<
-        DataModel,
-        SourceItem,
-        AttachSource<Item, SourceItem, SourceKey>,
-        Nullable
-      >(db, withThroughNodeSourceKey(plan, key), nullable);
     },
   } as SingleThroughQueryBuilder<Item, SourceItem, Nullable>;
 }
@@ -1566,12 +1564,6 @@ export function createQueryFacade<DataModel extends GenericDataModel>(
       },
     },
   ) as QueryFacade<DataModel>;
-}
-
-export function compute<Output = unknown>(
-  load: () => Promise<Output> | Output,
-): QueryNode<Output> {
-  return createQueryNode(async () => await load());
 }
 
 async function queryUniqueByIndex<DataModel extends GenericDataModel>(

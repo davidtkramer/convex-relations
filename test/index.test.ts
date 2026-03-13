@@ -1,7 +1,7 @@
 import { convexTest } from "convex-test";
 import type { GenericId } from "convex/values";
 import { beforeEach, describe, expect, test } from "vitest";
-import { compute, createQueryFacade } from "../src/index";
+import { createQueryFacade } from "../src/index";
 import {
   rewindFactories,
   seedAuthor,
@@ -22,7 +22,7 @@ beforeEach(() => {
 });
 
 describe("convex-relations direct id builders", () => {
-  test("support find, findOrNull, repeated with composition, and compute", async () => {
+  test("support find, findOrNull, repeated with composition, and defer", async () => {
     const t = convexTest(schema, modules);
 
     await t.run(async (ctx) => {
@@ -33,9 +33,9 @@ describe("convex-relations direct id builders", () => {
       const found = await q.posts
         .find(postId)
         .with((post) => ({ author: q.authors.find(post.authorId) }))
-        .with((post) => ({
+        .with((post, { defer }) => ({
           authorPosts: q.posts.byAuthorId(post.author._id).many(),
-          commentCount: compute(
+          commentCount: defer(
             async () => (await q.comments.byPostId(post._id).many()).length,
           ),
         }));
@@ -371,7 +371,7 @@ describe("convex-relations indexed builders", () => {
 });
 
 describe("convex-relations through builders", () => {
-  test("support collection sources, source nodes, withSource, and expansions", async () => {
+  test("support collection sources, source context, and expansions", async () => {
     const t = convexTest(schema, modules);
 
     await t.run(async (ctx) => {
@@ -390,20 +390,22 @@ describe("convex-relations through builders", () => {
 
       const postTags = await q.tags
         .through(q.postsTags.byPostId(postId), "tagId")
-        .withSource("link")
+        .with((tag, { source }) => ({ link: source }))
         .many();
       const taggedPosts = await q.posts
         .through(q.postsTags.byTagId(tagId), "postId")
-        .withSource("link")
+        .with((post, { source }) => ({ link: source }))
         .many();
       const expandedThroughFirst = await q.posts
         .through(q.postsTags.byTagId(tagId), "postId")
-        .withSource("link")
-        .with((post) => ({ author: q.authors.find(post.authorId) }))
+        .with((post, { source }) => ({
+          link: source,
+          author: q.authors.find(post.authorId),
+        }))
         .first();
       const expandedThroughUniqueOrNull = await q.tags
         .through(q.postsTags.byPostIdAndTagId(postId, tagId), "tagId")
-        .withSource("link")
+        .with((tag, { source }) => ({ link: source }))
         .uniqueOrNull();
       const throughZeroArg = await q.tags
         .through(
@@ -424,8 +426,8 @@ describe("convex-relations through builders", () => {
         .many();
       const throughSingleSource = await q.authors
         .through(q.posts.bySlug("tagged-post").unique(), "authorId")
-        .withSource("post")
-        .with((author) => ({
+        .with((author, { source }) => ({
+          post: source,
           latestPost: q.posts
             .byAuthorId(author._id)
             .order("desc")
@@ -433,7 +435,7 @@ describe("convex-relations through builders", () => {
         }));
       const throughTakenSource = await q.tags
         .through(q.postsTags.byPostId(postId).order("desc").take(1), "tagId")
-        .withSource("link");
+        .with((tag, { source }) => ({ link: source }));
 
       expect(postTags).toHaveLength(2);
       expect(postTags[0]?.link._id).toBe(firstLinkId);
