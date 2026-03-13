@@ -135,6 +135,31 @@ describe("convex-relations type surface", () => {
     expectTypeOf<Awaited<typeof tagsByInternalId>>().toEqualTypeOf<
       DataModel["tags"]["document"][]
     >();
+
+    const tagMetrics = {
+      slug: {
+        index: "bySlug",
+        field: "slug",
+      },
+      url: {
+        index: "byURL",
+        field: "url",
+      },
+    } as const;
+    const tagMetric = null as any as keyof typeof tagMetrics;
+    const m = tagMetrics[tagMetric];
+
+    const dynamicIndexedTags = q.tags.withIndex(m.index, (query) =>
+      query.eq(m.field, "value"),
+    ).many();
+    expectTypeOf<Awaited<typeof dynamicIndexedTags>>().toEqualTypeOf<
+      DataModel["tags"]["document"][]
+    >();
+
+    q.tags.bySlug((query) => {
+      // @ts-expect-error wrong field for bySlug selector
+      return query.eq("url", "value");
+    });
   });
 
   test("through builders support collection sources, source nodes, and source composition", () => {

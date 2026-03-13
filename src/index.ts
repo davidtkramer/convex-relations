@@ -391,6 +391,13 @@ type TableNamespace<
   in<const Id extends GenericId<Table>>(
     ids: Id[],
   ): TableBatchQueryFacade<DataModel, Table>;
+  withIndex<const IndexName extends UserIndex<DataModel, Table>>(
+    index: IndexName,
+    selector: IndexSelector<DataModel, Table, IndexName>,
+  ): TableQueryFacade<DataModel, Table>;
+  withIndex<const IndexName extends UserIndex<DataModel, Table>>(
+    index: IndexName,
+  ): TableRangeQueryFacade<DataModel, Table>;
   through: {
     <const SourceTable extends AppTable<DataModel>, SourceItem, const TargetField extends ThroughSourceField<
       DataModel,
@@ -1524,6 +1531,12 @@ function createTableNamespace<
     },
     in(ids: GenericId<Table>[]) {
       return createBatchFacade(db, createBatchPlan(table, 'by_id', ids as never[]));
+    },
+    withIndex(index: string, selector?: unknown) {
+      return createCollectionFacade(
+        db,
+        createQueryPlan(table, index, selector, resolveIndexFields(table, index)),
+      );
     },
     through(sourceQuery: unknown, targetField: string) {
       if (isCollectionSource(sourceQuery)) {
