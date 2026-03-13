@@ -42,6 +42,7 @@
     "convex-test": "^0.0.41",
     "tsup": "^8.5.0",
     "typescript": "^5.9.2",
+    "typical-data": "^0.5.0",
     "vitest": "^4.0.15"
   },
   "packageManager": "pnpm@9.15.9"

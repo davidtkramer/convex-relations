@@ -1,96 +1,52 @@
-import { convexTest } from 'convex-test';
-import type { GenericId } from 'convex/values';
-import { describe, expect, test } from 'vitest';
-import { compute, createQueryFacade } from '../src/index';
-import schema from './schema';
+import { convexTest } from "convex-test";
+import type { GenericId } from "convex/values";
+import { beforeEach, describe, expect, test } from "vitest";
+import { compute, createQueryFacade } from "../src/index";
+import {
+  rewindFactories,
+  seedAuthor,
+  seedComment,
+  seedPost,
+  seedPostTag,
+  seedTag,
+} from "./factories";
+import schema from "./schema";
 
 // @ts-ignore
-const modules = import.meta.glob(['./**/*.ts', '../convex/**/*.ts']);
+const modules = import.meta.glob(["./**/*.ts", "../convex/**/*.ts"]);
 
-type AuthorId = GenericId<'authors'>;
-type PostId = GenericId<'posts'>;
-type CommentId = GenericId<'comments'>;
-type TagId = GenericId<'tags'>;
+type PostId = GenericId<"posts">;
 
-async function seedAuthor(
-  ctx: any,
-  slug: string = crypto.randomUUID(),
-  reputation = 0,
-) {
-  return await ctx.db.insert('authors', {
-    slug,
-    name: slug,
-    reputation,
-  });
-}
+beforeEach(() => {
+  rewindFactories();
+});
 
-async function seedPost(
-  ctx: any,
-  authorId: AuthorId,
-  slug: string,
-  title = slug,
-  status: 'draft' | 'published' = 'published',
-) {
-  return await ctx.db.insert('posts', {
-    slug,
-    title,
-    body: `${slug}-body`,
-    status,
-    authorId,
-  });
-}
-
-async function seedComment(
-  ctx: any,
-  postId: PostId,
-  authorId: AuthorId,
-  body: string,
-  status: 'pending' | 'approved' = 'approved',
-) {
-  return await ctx.db.insert('comments', {
-    postId,
-    authorId,
-    body,
-    status,
-  });
-}
-
-async function seedTag(ctx: any, slug: string) {
-  return await ctx.db.insert('tags', {
-    slug,
-    name: slug,
-  });
-}
-
-async function seedPostTag(ctx: any, postId: PostId, tagId: TagId) {
-  return await ctx.db.insert('postsTags', {
-    postId,
-    tagId,
-  });
-}
-
-describe('convex-relations direct id builders', () => {
-  test('support find, findOrNull, repeated with composition, and compute', async () => {
+describe("convex-relations direct id builders", () => {
+  test("support find, findOrNull, repeated with composition, and compute", async () => {
     const t = convexTest(schema, modules);
 
     await t.run(async (ctx) => {
       const q = createQueryFacade(ctx.db);
-      const authorId = await seedAuthor(ctx, 'ada');
-      const postId = await seedPost(ctx, authorId, 'hello-world');
+      const authorId = await seedAuthor(ctx, { slug: "ada" });
+      const postId = await seedPost(ctx, { authorId, slug: "hello-world" });
 
       const found = await q.posts
         .find(postId)
         .with((post) => ({ author: q.authors.find(post.authorId) }))
         .with((post) => ({
           authorPosts: q.posts.byAuthorId(post.author._id).many(),
-          commentCount: compute(async () => (await q.comments.byPostId(post._id).many()).length),
+          commentCount: compute(
+            async () => (await q.comments.byPostId(post._id).many()).length,
+          ),
         }));
       const maybeFound = await q.posts.findOrNull(postId).with((post) => ({
         author: q.authors.find(post.authorId),
       }));
-      const missing = await q.posts.findOrNull('missing-post' as PostId);
+      const missing = await q.posts.findOrNull("missing-post" as PostId);
 
-      await expect(q.posts.find('missing-post' as PostId)).rejects.toThrow(/Could not find posts/);
+      await expect(q.posts.find("missing-post" as PostId)).rejects.toThrow(
+        /Could not find posts/,
+      );
       expect(found.author._id).toBe(authorId);
       expect(found.authorPosts.map((post) => post._id)).toEqual([postId]);
       expect(found.commentCount).toBe(0);
@@ -100,51 +56,59 @@ describe('convex-relations direct id builders', () => {
   });
 });
 
-describe('convex-relations table range builders', () => {
-  test('support many, first, firstOrNull, order, filter, and staged with composition', async () => {
+describe("convex-relations table range builders", () => {
+  test("support many, first, firstOrNull, order, filter, and staged with composition", async () => {
     const t = convexTest(schema, modules);
 
     await t.run(async (ctx) => {
       const q = createQueryFacade(ctx.db);
-      const authorId = await seedAuthor(ctx, 'grace');
-      const alphaId = await seedPost(ctx, authorId, 'alpha', 'A');
-      const betaId = await seedPost(ctx, authorId, 'beta', 'B');
-      const deletedId = await seedPost(ctx, authorId, 'deleted', 'C');
+      const authorId = await seedAuthor(ctx, { slug: "grace" });
+      const alphaId = await seedPost(ctx, { authorId, slug: "alpha" });
+      const betaId = await seedPost(ctx, { authorId, slug: "beta" });
+      const deletedId = await seedPost(ctx, { authorId, slug: "deleted" });
 
       await ctx.db.delete(deletedId);
 
       const first = await q.posts
-        .order('desc')
-        .filter((query) => query.neq(query.field('slug'), 'alpha'))
+        .order("desc")
+        .filter((query) => query.neq(query.field("slug"), "alpha"))
         .first();
       const firstOrNull = await q.posts
-        .filter((query) => query.eq(query.field('slug'), 'missing'))
+        .filter((query) => query.eq(query.field("slug"), "missing"))
         .firstOrNull();
       const many = await q.posts
         .with((post) => ({ author: q.authors.find(post.authorId) }))
-        .with((post) => ({ authorPosts: q.posts.byAuthorId(post.author._id).many() }))
-        .order('desc')
-        .filter((query) => query.neq(query.field('slug'), 'alpha'))
-        .filter((query) => query.eq(query.field('status'), 'published'))
+        .with((post) => ({
+          authorPosts: q.posts.byAuthorId(post.author._id).many(),
+        }))
+        .order("desc")
+        .filter((query) => query.neq(query.field("slug"), "alpha"))
+        .filter((query) => query.eq(query.field("status"), "published"))
         .many();
 
       expect(first._id).toBe(betaId);
       expect(firstOrNull).toBeNull();
       expect(many).toHaveLength(1);
       expect(many[0]?.author._id).toBe(authorId);
-      expect(many[0]?.authorPosts.map((post) => post._id)).toEqual([alphaId, betaId]);
+      expect(many[0]?.authorPosts.map((post) => post._id)).toEqual([
+        alphaId,
+        betaId,
+      ]);
     });
   });
 
-  test('support direct batch lookups with with and skip missing rows', async () => {
+  test("support direct batch lookups with with and skip missing rows", async () => {
     const t = convexTest(schema, modules);
 
     await t.run(async (ctx) => {
       const q = createQueryFacade(ctx.db);
-      const authorId = await seedAuthor(ctx, 'linus');
-      const alphaId = await seedPost(ctx, authorId, 'batch-a', 'A');
-      const betaId = await seedPost(ctx, authorId, 'batch-b', 'B');
-      const deletedId = await seedPost(ctx, authorId, 'batch-deleted', 'C');
+      const authorId = await seedAuthor(ctx, { slug: "linus" });
+      const alphaId = await seedPost(ctx, { authorId, slug: "batch-a" });
+      const betaId = await seedPost(ctx, { authorId, slug: "batch-b" });
+      const deletedId = await seedPost(ctx, {
+        authorId,
+        slug: "batch-deleted",
+      });
 
       await ctx.db.delete(deletedId);
 
@@ -158,14 +122,14 @@ describe('convex-relations table range builders', () => {
     });
   });
 
-  test('support take and paginate', async () => {
+  test("support take and paginate", async () => {
     const t = convexTest(schema, modules);
 
     await t.run(async (ctx) => {
       const q = createQueryFacade(ctx.db);
-      const authorId = await seedAuthor(ctx, 'margaret');
-      await seedPost(ctx, authorId, 'take-a', 'A');
-      await seedPost(ctx, authorId, 'take-b', 'B');
+      const authorId = await seedAuthor(ctx, { slug: "margaret" });
+      await seedPost(ctx, { authorId, slug: "take-a" });
+      await seedPost(ctx, { authorId, slug: "take-b" });
 
       const taken = await q.posts.take(1);
       const page = await q.posts.paginate({ cursor: null, numItems: 1 });
@@ -176,7 +140,7 @@ describe('convex-relations table range builders', () => {
     });
   });
 
-  test('support unique and uniqueOrNull with and without expansions', async () => {
+  test("support unique and uniqueOrNull with and without expansions", async () => {
     const t = convexTest(schema, modules);
 
     await t.run(async (ctx) => {
@@ -185,8 +149,8 @@ describe('convex-relations table range builders', () => {
       expect(await q.posts.uniqueOrNull()).toBeNull();
       await expect(q.posts.unique()).rejects.toThrow(/Could not find posts/);
 
-      const authorId = await seedAuthor(ctx, 'donald');
-      const onlyPostId = await seedPost(ctx, authorId, 'only-post', 'only');
+      const authorId = await seedAuthor(ctx, { slug: "donald" });
+      const onlyPostId = await seedPost(ctx, { authorId, slug: "only-post" });
 
       const unique = await q.posts.unique();
       const maybeUnique = await q.posts.uniqueOrNull();
@@ -202,14 +166,14 @@ describe('convex-relations table range builders', () => {
       expect(expandedUnique.author._id).toBe(authorId);
       expect(expandedMaybeUnique?.author._id).toBe(authorId);
 
-      await seedPost(ctx, authorId, 'second-post', 'second');
+      await seedPost(ctx, { authorId, slug: "second-post" });
 
       await expect(q.posts.unique()).rejects.toThrow();
       await expect(q.posts.uniqueOrNull()).rejects.toThrow();
     });
   });
 
-  test('namespaces are not thenable', async () => {
+  test("namespaces are not thenable", async () => {
     const t = convexTest(schema, modules);
 
     await t.run(async (ctx) => {
@@ -222,15 +186,15 @@ describe('convex-relations table range builders', () => {
   });
 });
 
-describe('convex-relations indexed builders', () => {
-  test('support unique and uniqueOrNull with missing duplicates and expansions', async () => {
+describe("convex-relations indexed builders", () => {
+  test("support unique and uniqueOrNull with missing duplicates and expansions", async () => {
     const t = convexTest(schema, modules);
 
     await t.run(async (ctx) => {
       const q = createQueryFacade(ctx.db);
-      const slug = 'octavia';
-      const authorId = await seedAuthor(ctx, slug);
-      const postId = await seedPost(ctx, authorId, 'indexed-post');
+      const slug = "octavia";
+      const authorId = await seedAuthor(ctx, { slug });
+      const postId = await seedPost(ctx, { authorId, slug: "indexed-post" });
       const author = await q.authors.bySlug(slug).unique();
       const expandedAuthor = await q.authors
         .bySlug(slug)
@@ -244,10 +208,10 @@ describe('convex-relations indexed builders', () => {
           posts: q.posts.byAuthorId(foundAuthor._id).many(),
         }))
         .uniqueOrNull();
-      const maybeMissing = await q.authors.bySlug('missing').uniqueOrNull();
+      const maybeMissing = await q.authors.bySlug("missing").uniqueOrNull();
 
-      await seedAuthor(ctx, 'dupe');
-      await seedAuthor(ctx, 'dupe');
+      await seedAuthor(ctx, { slug: "dupe" });
+      await seedAuthor(ctx, { slug: "dupe" });
 
       expect(author._id).toBe(authorId);
       expect(expandedAuthor._id).toBe(authorId);
@@ -257,39 +221,52 @@ describe('convex-relations indexed builders', () => {
       expect(maybeExpandedAuthor?.posts).toHaveLength(1);
       expect(maybeExpandedAuthor?.posts[0]?._id).toBe(postId);
       expect(maybeMissing).toBeNull();
-      await expect(q.authors.bySlug('missing').unique()).rejects.toThrow(
+      await expect(q.authors.bySlug("missing").unique()).rejects.toThrow(
         /Could not find authors with index bySlug/,
       );
-      await expect(q.authors.bySlug('dupe').unique()).rejects.toThrow();
+      await expect(q.authors.bySlug("dupe").unique()).rejects.toThrow();
     });
   });
 
-  test('support first, firstOrNull, many, take, and paginate with filter, order, and with', async () => {
+  test("support first, firstOrNull, many, take, and paginate with filter, order, and with", async () => {
     const t = convexTest(schema, modules);
 
     await t.run(async (ctx) => {
       const q = createQueryFacade(ctx.db);
-      const postAuthorId = await seedAuthor(ctx, 'ursula');
-      const commentAuthorA = await seedAuthor(ctx, 'commenter-a');
-      const commentAuthorB = await seedAuthor(ctx, 'commenter-b');
-      const postId = await seedPost(ctx, postAuthorId, 'comments-post');
-      const alphaId = await seedComment(ctx, postId, commentAuthorA, 'first');
-      const betaId = await seedComment(ctx, postId, commentAuthorB, 'second');
+      const postAuthorId = await seedAuthor(ctx, { slug: "ursula" });
+      const commentAuthorA = await seedAuthor(ctx, { slug: "commenter-a" });
+      const commentAuthorB = await seedAuthor(ctx, { slug: "commenter-b" });
+      const postId = await seedPost(ctx, {
+        authorId: postAuthorId,
+        slug: "comments-post",
+      });
+      const alphaId = await seedComment(ctx, {
+        postId,
+        authorId: commentAuthorA,
+        body: "first",
+      });
+      const betaId = await seedComment(ctx, {
+        postId,
+        authorId: commentAuthorB,
+        body: "second",
+      });
 
       const first = await q.comments
         .byPostId(postId)
         .with((comment) => ({ author: q.authors.find(comment.authorId) }))
-        .order('desc')
+        .order("desc")
         .first();
-      const maybeMissing = await q.comments.byPostId('missing-post' as PostId).firstOrNull();
+      const maybeMissing = await q.comments
+        .byPostId("missing-post" as PostId)
+        .firstOrNull();
       const many = await q.comments
         .byPostId(postId)
         .with((comment) => ({ author: q.authors.find(comment.authorId) }))
-        .order('desc')
-        .filter((query) => query.neq(query.field('authorId'), commentAuthorA))
+        .order("desc")
+        .filter((query) => query.neq(query.field("authorId"), commentAuthorA))
         .many();
-      const taken = await q.comments.byPostId(postId).order('desc').take(1);
-      const page = await q.comments.byPostId(postId).order('desc').paginate({
+      const taken = await q.comments.byPostId(postId).order("desc").take(1);
+      const page = await q.comments.byPostId(postId).order("desc").paginate({
         cursor: null,
         numItems: 1,
       });
@@ -307,90 +284,108 @@ describe('convex-relations indexed builders', () => {
     });
   });
 
-  test('support selector and zero-arg range entrypoints', async () => {
+  test("support selector and zero-arg range entrypoints", async () => {
     const t = convexTest(schema, modules);
 
     await t.run(async (ctx) => {
       const q = createQueryFacade(ctx.db);
-      const withReputationId = await seedAuthor(ctx, 'experienced', 10);
-      await seedAuthor(ctx, 'newcomer', 0);
+      const withReputationId = await seedAuthor(ctx, {
+        slug: "experienced",
+        reputation: 10,
+      });
+      await seedAuthor(ctx, {
+        slug: "newcomer",
+        reputation: 0,
+      });
 
       const authorsAbove = await q.authors
-        .byReputation((query) => query.gt('reputation', 0))
+        .byReputation((query) => query.gt("reputation", 0))
         .many();
       const rangeAuthors = await q.authors
         .byReputation()
-        .filter((query) => query.eq(query.field('reputation'), 10))
+        .filter((query) => query.eq(query.field("reputation"), 10))
         .many();
 
-      expect(authorsAbove.map((author) => author._id)).toEqual([withReputationId]);
-      expect(rangeAuthors.map((author) => author._id)).toEqual([withReputationId]);
+      expect(authorsAbove.map((author) => author._id)).toEqual([
+        withReputationId,
+      ]);
+      expect(rangeAuthors.map((author) => author._id)).toEqual([
+        withReputationId,
+      ]);
     });
   });
 
-  test('support indexed batch lookups through custom and built-in indexes', async () => {
+  test("support indexed batch lookups through custom and built-in indexes", async () => {
     const t = convexTest(schema, modules);
 
     await t.run(async (ctx) => {
       const q = createQueryFacade(ctx.db);
-      const firstTagId = await seedTag(ctx, 'tag-a');
-      const secondTagId = await seedTag(ctx, 'tag-b');
+      const firstTagId = await seedTag(ctx, { slug: "tag-a" });
+      const secondTagId = await seedTag(ctx, { slug: "tag-b" });
 
-      const bySlug = await q.tags.bySlug.in(['tag-a', 'tag-b']).many();
-      const byInternalId = await q.tags.by_id.in([firstTagId, secondTagId]).many();
+      const bySlug = await q.tags.bySlug.in(["tag-a", "tag-b"]).many();
+      const byInternalId = await q.tags.by_id
+        .in([firstTagId, secondTagId])
+        .many();
 
       expect(bySlug.map((tag) => tag._id)).toEqual([firstTagId, secondTagId]);
-      expect(byInternalId.map((tag) => tag._id)).toEqual([firstTagId, secondTagId]);
+      expect(byInternalId.map((tag) => tag._id)).toEqual([
+        firstTagId,
+        secondTagId,
+      ]);
     });
   });
 });
 
-describe('convex-relations via builders', () => {
-  test('support value, zero-arg, selector, withSource, and expansions', async () => {
+describe("convex-relations via builders", () => {
+  test("support value, zero-arg, selector, withSource, and expansions", async () => {
     const t = convexTest(schema, modules);
 
     await t.run(async (ctx) => {
       const q = createQueryFacade(ctx.db);
-      const authorId = await seedAuthor(ctx, 'jane');
-      const postId = await seedPost(ctx, authorId, 'tagged-post');
-      const secondPostId = await seedPost(ctx, authorId, 'tagged-post-2');
-      const tagId = await seedTag(ctx, 'featured');
-      const secondTagId = await seedTag(ctx, 'news');
-      const firstLinkId = await seedPostTag(ctx, postId, tagId);
-      await seedPostTag(ctx, postId, secondTagId);
-      await seedPostTag(ctx, secondPostId, tagId);
+      const authorId = await seedAuthor(ctx, { slug: "jane" });
+      const postId = await seedPost(ctx, { authorId, slug: "tagged-post" });
+      const secondPostId = await seedPost(ctx, {
+        authorId,
+        slug: "tagged-post-2",
+      });
+      const tagId = await seedTag(ctx, { slug: "featured" });
+      const secondTagId = await seedTag(ctx, { slug: "news" });
+      const firstLinkId = await seedPostTag(ctx, { postId, tagId });
+      await seedPostTag(ctx, { postId, tagId: secondTagId });
+      await seedPostTag(ctx, { postId: secondPostId, tagId });
 
       const postTags = await q.tags
-        .via('postsTags', 'tagId')
+        .via("postsTags", "tagId")
         .byPostId(postId)
-        .withSource('link')
+        .withSource("link")
         .many();
       const taggedPosts = await q.posts
-        .via('postsTags', 'postId')
+        .via("postsTags", "postId")
         .byTagId(tagId)
-        .withSource('link')
+        .withSource("link")
         .many();
       const expandedViaFirst = await q.posts
-        .via('postsTags', 'postId')
+        .via("postsTags", "postId")
         .byTagId(tagId)
-        .withSource('link')
+        .withSource("link")
         .with((post) => ({ author: q.authors.find(post.authorId) }))
         .first();
       const expandedViaUniqueOrNull = await q.tags
-        .via('postsTags', 'tagId')
+        .via("postsTags", "tagId")
         .byPostIdAndTagId({ postId, tagId })
-        .withSource('link')
+        .withSource("link")
         .uniqueOrNull();
       const viaZeroArg = await q.tags
-        .via('postsTags', 'tagId')
+        .via("postsTags", "tagId")
         .byPostId()
-        .filter((query) => query.eq(query.field('postId'), postId))
-        .order('desc')
+        .filter((query) => query.eq(query.field("postId"), postId))
+        .order("desc")
         .many();
       const viaSelector = await q.tags
-        .via('postsTags', 'tagId')
-        .byPostId((query) => query.eq('postId', postId))
-        .order('desc')
+        .via("postsTags", "tagId")
+        .byPostId((query) => query.eq("postId", postId))
+        .order("desc")
         .many();
 
       expect(postTags).toHaveLength(2);
