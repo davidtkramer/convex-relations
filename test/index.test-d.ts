@@ -7,6 +7,7 @@ import { compute, createQueryFacade, type QueryFacade } from "../src/index";
 import schema from "./schema";
 
 type DataModel = DataModelFromSchemaDefinition<typeof schema>;
+type IsAny<T> = 0 extends 1 & T ? true : false;
 type PostId = DataModel["posts"]["document"]["_id"];
 type TagId = DataModel["tags"]["document"]["_id"];
 
@@ -119,6 +120,11 @@ describe("convex-relations type surface", () => {
     expectTypeOf<Awaited<typeof authorsAbove>>().toEqualTypeOf<
       DataModel["authors"]["document"][]
     >();
+
+    q.authors.byReputation((query) => {
+      assertType<false>(null as any as IsAny<typeof query>);
+      return query.gt("reputation", 0);
+    });
 
     const tagsBySlug = q.tags.bySlug.in(["news"]).many();
     expectTypeOf<Awaited<typeof tagsBySlug>>().toEqualTypeOf<
@@ -255,5 +261,15 @@ describe("convex-relations type surface", () => {
     void q.tags.via("postsTags", "postId");
     // @ts-expect-error invalid join index
     void q.tags.via("postsTags", "tagId").bySlug("news");
+  });
+
+  test("filter callbacks are not any", () => {
+    q.authors
+      .byReputation()
+      .filter((query) => {
+        assertType<false>(null as any as IsAny<typeof query>);
+        return query.eq(query.field("reputation"), 10);
+      })
+      .many();
   });
 });

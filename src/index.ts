@@ -1,8 +1,13 @@
 import type {
   DocumentByName,
+  ExpressionOrValue,
+  FilterBuilder,
   GenericDatabaseReader,
   GenericDataModel,
+  GenericTableInfo,
   IndexNames,
+  IndexRange,
+  IndexRangeBuilder,
   NamedIndex,
   NamedTableInfo,
   TableNamesInDataModel,
@@ -149,6 +154,10 @@ type JoinTargetTable<
 type QueryNode<Output> = PromiseLike<Output> & {
   readonly _executeRoot: () => Promise<Output>;
 };
+type TableInfo<
+  DataModel extends GenericDataModel,
+  Table extends AppTable<DataModel>,
+> = NamedTableInfo<DataModel, Table>;
 
 type WithSpec = Record<string, QueryNode<any>>;
 type WithBuilder<ParentItem, Spec extends WithSpec | undefined = WithSpec | undefined> = (
@@ -185,10 +194,21 @@ type PaginatedResult<Item> = {
   continueCursor: string;
 };
 
-type QueryFilter = (q: any) => any;
+type QueryFilter<TableInfo extends GenericTableInfo> = (
+  q: FilterBuilder<TableInfo>,
+) => ExpressionOrValue<boolean>;
 type QueryModifier = (query: any) => any;
 const RESERVED_PROMISE_KEYS = new Set(['then', 'catch', 'finally']);
-type IndexSelector = (q: any) => any;
+type IndexSelector<
+  DataModel extends GenericDataModel,
+  Table extends AppTable<DataModel>,
+  IndexName extends UserIndex<DataModel, Table>,
+> = (
+  q: IndexRangeBuilder<
+    AppDoc<DataModel, Table>,
+    NamedIndex<TableInfo<DataModel, Table>, IndexName>
+  >,
+) => IndexRange;
 type ExpandableSingleQueryBuilder<Item, Nullable extends boolean> = QueryNode<
   Nullable extends true ? Item | null : Item
 > & {
@@ -238,7 +258,9 @@ type TableQueryFacade<
     withBuilder: Builder,
   ): TableQueryFacade<DataModel, Table, ExpandWith<Item, Builder>>;
   order(direction: 'asc' | 'desc'): TableQueryFacade<DataModel, Table, Item>;
-  filter(filterer: QueryFilter): TableQueryFacade<DataModel, Table, Item>;
+  filter(
+    filterer: QueryFilter<TableInfo<DataModel, Table>>,
+  ): TableQueryFacade<DataModel, Table, Item>;
   unique(): UniqueQueryBuilder<Item>;
   uniqueOrNull(): UniqueOrNullQueryBuilder<Item>;
   first(): FirstQueryBuilder<Item>;
@@ -257,7 +279,9 @@ type TableRangeQueryFacade<
     withBuilder: Builder,
   ): TableRangeQueryFacade<DataModel, Table, ExpandWith<Item, Builder>>;
   order(direction: 'asc' | 'desc'): TableRangeQueryFacade<DataModel, Table, Item>;
-  filter(filterer: QueryFilter): TableRangeQueryFacade<DataModel, Table, Item>;
+  filter(
+    filterer: QueryFilter<TableInfo<DataModel, Table>>,
+  ): TableRangeQueryFacade<DataModel, Table, Item>;
   unique(): UniqueQueryBuilder<Item>;
   uniqueOrNull(): UniqueOrNullQueryBuilder<Item>;
   first(): FirstQueryBuilder<Item>;
@@ -288,7 +312,9 @@ type ViaQueryFacade<
     withBuilder: Builder,
   ): ViaQueryFacade<DataModel, TargetTable, JoinTable, ExpandWith<Item, Builder>>;
   order(direction: 'asc' | 'desc'): ViaQueryFacade<DataModel, TargetTable, JoinTable, Item>;
-  filter(filterer: QueryFilter): ViaQueryFacade<DataModel, TargetTable, JoinTable, Item>;
+  filter(
+    filterer: QueryFilter<TableInfo<DataModel, JoinTable>>,
+  ): ViaQueryFacade<DataModel, TargetTable, JoinTable, Item>;
   withSource<const SourceKey extends string>(
     key: SourceKey,
   ): ViaQueryFacade<
@@ -330,7 +356,9 @@ type ViaIndexNamespace<
     <const Args extends PositionalIndexArgs<DataModel, JoinTable, IndexName>>(
       ...args: Args
     ): ViaQueryFacade<DataModel, TargetTable, JoinTable>;
-    (selector: IndexSelector): ViaQueryFacade<DataModel, TargetTable, JoinTable>;
+    (
+      selector: IndexSelector<DataModel, JoinTable, IndexName>,
+    ): ViaQueryFacade<DataModel, TargetTable, JoinTable>;
   };
 };
 
@@ -356,7 +384,11 @@ type TableNamespace<
   ) => ViaIndexNamespace<DataModel, Table, JoinTable>;
 } & TableRangeQueryFacade<DataModel, Table> & {
     [IndexName in TableIndexName<DataModel, Table>]: {
-      (selector: IndexSelector): TableQueryFacade<DataModel, Table>;
+      (
+        selector: IndexName extends UserIndex<DataModel, Table>
+          ? IndexSelector<DataModel, Table, IndexName>
+          : never,
+      ): TableQueryFacade<DataModel, Table>;
       <const Args extends TableIndexInvocationArgs<DataModel, Table, IndexName>>(
         ...args: Args
       ): TableQueryFacade<DataModel, Table>;
@@ -560,7 +592,7 @@ function createIndexedQuery<DataModel extends GenericDataModel>(
     return baseQuery.withIndex(index as any);
   }
   if (typeof selector === 'function') {
-    return baseQuery.withIndex(index as any, selector as IndexSelector);
+    return baseQuery.withIndex(index as any, selector as any);
   }
   if (index === 'by_id') {
     return baseQuery.withIndex(index as any, (q: any) => q.eq('_id', selector));
@@ -581,7 +613,7 @@ function createViaQuery<DataModel extends GenericDataModel>(
     return baseQuery.withIndex(index as any);
   }
   if (typeof selector === 'function') {
-    return baseQuery.withIndex(index as any, selector as IndexSelector);
+    return baseQuery.withIndex(index as any, selector as any);
   }
   return baseQuery.withIndex(index as any, (q: any) =>
     applyIndexValues(q, normalizeIndexValues(index, selector)),
@@ -976,7 +1008,7 @@ function createCollectionFacade<Item>(
         withModifier(plan, (query) => query.order(direction)),
       );
     },
-    filter(filterer: QueryFilter) {
+    filter(filterer: any) {
       return createCollectionFacade<Item>(
         db,
         withModifier(plan, (query) => query.filter(filterer)),
