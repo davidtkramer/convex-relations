@@ -61,8 +61,13 @@ describe("convex-relations direct id builders", () => {
     await t.run(async (ctx) => {
       const q = createQueryFacade(ctx.db);
       const authorId = await seedAuthor(ctx, { slug: "nested-take-author" });
-      const commenterId = await seedAuthor(ctx, { slug: "nested-take-commenter" });
-      const postId = await seedPost(ctx, { authorId, slug: "nested-take-post" });
+      const commenterId = await seedAuthor(ctx, {
+        slug: "nested-take-commenter",
+      });
+      const postId = await seedPost(ctx, {
+        authorId,
+        slug: "nested-take-post",
+      });
 
       await seedComment(ctx, { postId, authorId: commenterId, body: "older" });
       const newestCommentId = await seedComment(ctx, {
@@ -72,7 +77,10 @@ describe("convex-relations direct id builders", () => {
       });
 
       const post = await q.posts.find(postId).with((foundPost) => ({
-        recentComments: q.comments.byPostId(foundPost._id).order("desc").take(1),
+        recentComments: q.comments
+          .byPostId(foundPost._id)
+          .order("desc")
+          .take(1),
       }));
 
       expect(post.recentComments).toHaveLength(1);
@@ -408,7 +416,9 @@ describe("convex-relations through builders", () => {
         .many();
       const throughSelector = await q.tags
         .through(
-          q.postsTags.byPostId((query) => query.eq("postId", postId)).order("desc"),
+          q.postsTags
+            .byPostId((query) => query.eq("postId", postId))
+            .order("desc"),
           "tagId",
         )
         .many();
@@ -416,7 +426,10 @@ describe("convex-relations through builders", () => {
         .through(q.posts.bySlug("tagged-post").unique(), "authorId")
         .withSource("post")
         .with((author) => ({
-          latestPost: q.posts.byAuthorId(author._id).order("desc").firstOrNull(),
+          latestPost: q.posts
+            .byAuthorId(author._id)
+            .order("desc")
+            .firstOrNull(),
         }));
       const throughTakenSource = await q.tags
         .through(q.postsTags.byPostId(postId).order("desc").take(1), "tagId")
@@ -427,8 +440,14 @@ describe("convex-relations through builders", () => {
       expect(taggedPosts).toHaveLength(2);
       expect(expandedThroughFirst.author._id).toBe(authorId);
       expect(expandedThroughUniqueOrNull?.link.postId).toBe(postId);
-      expect(throughZeroArg.map((tag) => tag._id)).toEqual([secondTagId, tagId]);
-      expect(throughSelector.map((tag) => tag._id)).toEqual([secondTagId, tagId]);
+      expect(throughZeroArg.map((tag) => tag._id)).toEqual([
+        secondTagId,
+        tagId,
+      ]);
+      expect(throughSelector.map((tag) => tag._id)).toEqual([
+        secondTagId,
+        tagId,
+      ]);
       expect(throughSingleSource.post._id).toBe(postId);
       expect(throughSingleSource.latestPost?._id).toBe(secondPostId);
       expect(throughTakenSource).toHaveLength(1);
