@@ -37,6 +37,7 @@ export const commentFactory = createFactory<InsertValue<'comments'>>({
 export const tagFactory = createFactory<InsertValue<'tags'>>({
   slug: ({ sequence }) => `tag-${sequence}`,
   name: ({ entity }) => entity.slug,
+  url: undefined,
 });
 
 export const postTagFactory = createFactory<InsertValue<'postsTags'>>({

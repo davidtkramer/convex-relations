@@ -10,6 +10,7 @@ import type {
   IndexRangeBuilder,
   NamedIndex,
   NamedTableInfo,
+  SchemaDefinition,
   TableNamesInDataModel,
 } from 'convex/server';
 import type { GenericId } from 'convex/values';
@@ -433,6 +434,16 @@ export type QueryFacade<DataModel extends GenericDataModel> = {
   [Table in AppTable<DataModel>]: TableNamespace<DataModel, Table>;
 };
 
+type RuntimeIndexDefinition = {
+  indexDescriptor?: unknown;
+  fields?: unknown;
+};
+
+type IndexFieldResolver = (
+  table: string,
+  index: string,
+) => readonly string[] | undefined;
+
 type QuerySourcePlan =
   | {
       kind: 'id';
@@ -444,12 +455,14 @@ type QuerySourcePlan =
       table: string;
       index?: string;
       selector?: unknown;
+      indexFields?: readonly string[];
     }
   | {
       kind: 'batch';
       table: string;
       index: string;
       values: unknown[];
+      indexFields?: readonly string[];
     };
 
 type QueryPlan = {
@@ -609,10 +622,13 @@ function withExpander(
   };
 }
 
-function normalizeIndexValues(index: string, value: unknown) {
+function normalizeIndexValues(
+  index: string,
+  value: unknown,
+  indexFields: readonly string[],
+) {
   if (Array.isArray(value)) {
-    const fieldNames = inferFieldNamesFromIndex(index);
-    return Object.fromEntries(fieldNames.map((field, index) => [field, value[index]]));
+    return Object.fromEntries(indexFields.map((field, index) => [field, value[index]]));
   }
 
   if (isPlainObject(value)) {
@@ -620,7 +636,7 @@ function normalizeIndexValues(index: string, value: unknown) {
   }
 
   return {
-    [inferFieldNameFromIndex(index)]: value,
+    [index === 'by_id' ? '_id' : indexFields[0]!]: value,
   };
 }
 
@@ -636,21 +652,17 @@ function applyIndexValues(query: any, values: Record<string, unknown>) {
   return current;
 }
 
-function inferFieldNameFromIndex(index: string) {
-  return inferFieldNamesFromIndex(index)[0]!;
-}
-
-function inferFieldNamesFromIndex(index: string) {
+function requireIndexFields(
+  index: string,
+  indexFields?: readonly string[],
+): readonly string[] {
   if (index === 'by_id') {
     return ['_id'];
   }
-  if (index.startsWith('by') && index.length > 2) {
-    return index
-      .slice(2)
-      .split('And')
-      .map((part) => `${part[0]!.toLowerCase()}${part.slice(1)}`);
+  if (indexFields === undefined) {
+    throw new Error(`Missing schema metadata for index ${index}`);
   }
-  throw new Error(`Cannot infer field name from index ${index}`);
+  return indexFields;
 }
 
 function createIndexedQuery<DataModel extends GenericDataModel>(
@@ -658,6 +670,7 @@ function createIndexedQuery<DataModel extends GenericDataModel>(
   table: AppTable<DataModel>,
   index?: string,
   selector?: unknown,
+  indexFields: readonly string[] = [],
 ) {
   const baseQuery = db.query(table);
   if (index === undefined) {
@@ -672,8 +685,9 @@ function createIndexedQuery<DataModel extends GenericDataModel>(
   if (index === 'by_id') {
     return baseQuery.withIndex(index as any, (q: any) => q.eq('_id', selector));
   }
+  const fields = requireIndexFields(index, indexFields);
   return baseQuery.withIndex(index as any, (q: any) =>
-    applyIndexValues(q, normalizeIndexValues(index, selector)),
+    applyIndexValues(q, normalizeIndexValues(index, selector, fields)),
   );
 }
 
@@ -744,7 +758,14 @@ async function* iterateDecoratedSourceItems<DataModel extends GenericDataModel>(
   const runtime = createPlanRuntime(db, plan);
   const source = plan.source;
   const query = buildQuery(
-    () => createIndexedQuery(db, source.table, source.index, source.selector),
+    () =>
+      createIndexedQuery(
+        db,
+        source.table,
+        source.index,
+        source.selector,
+        source.indexFields,
+      ),
     plan.modifiers,
   );
 
@@ -803,7 +824,13 @@ function createPlanRuntime<DataModel extends GenericDataModel>(
             await Promise.all(
               source.values.map(
                 async (value: unknown) =>
-                  await queryManyByIndex(db, source.table, source.index, value),
+                  await queryManyByIndex(
+                    db,
+                    source.table,
+                    source.index,
+                    value,
+                    source.indexFields,
+                  ),
               ),
             )
           ).flat(),
@@ -814,7 +841,14 @@ function createPlanRuntime<DataModel extends GenericDataModel>(
     case 'query': {
       const runQuery = () =>
         buildQuery(
-          () => createIndexedQuery(db, source.table, source.index, source.selector),
+          () =>
+            createIndexedQuery(
+              db,
+              source.table,
+              source.index,
+              source.selector,
+              source.indexFields,
+            ),
           plan.modifiers,
         );
 
@@ -1400,21 +1434,33 @@ function createIdPlan(table: string, id: GenericId<any>): QueryPlan {
   });
 }
 
-function createQueryPlan(table: string, index?: string, selector?: unknown): QueryPlan {
+function createQueryPlan(
+  table: string,
+  index?: string,
+  selector?: unknown,
+  indexFields?: readonly string[],
+): QueryPlan {
   return createPlan({
     kind: 'query',
     table,
     index,
     selector,
+    indexFields,
   });
 }
 
-function createBatchPlan(table: string, index: string, values: unknown[]): QueryPlan {
+function createBatchPlan(
+  table: string,
+  index: string,
+  values: unknown[],
+  indexFields?: readonly string[],
+): QueryPlan {
   return createPlan({
     kind: 'batch',
     table,
     index,
     values,
+    indexFields,
   });
 }
 
@@ -1465,6 +1511,7 @@ function createTableNamespace<
 >(
   db: DbReader<DataModel>,
   table: Table,
+  resolveIndexFields: IndexFieldResolver,
 ): TableNamespace<DataModel, Table> {
   const rootFacade = createCollectionFacade(db, createQueryPlan(table));
   const target = {
@@ -1530,6 +1577,7 @@ function createTableNamespace<
             table,
             prop as TableIndexName<DataModel, Table>,
             normalizeIndexSelectorArgs(args),
+            resolveIndexFields(table, prop),
           ),
         )) as ((...args: unknown[]) => unknown) & {
         in: (values: unknown[]) => unknown;
@@ -1538,7 +1586,12 @@ function createTableNamespace<
       indexMethod.in = (values: unknown[]) =>
         createBatchFacade(
           db,
-          createBatchPlan(table, prop as TableIndexName<DataModel, Table>, values),
+          createBatchPlan(
+            table,
+            prop as TableIndexName<DataModel, Table>,
+            values,
+            resolveIndexFields(table, prop),
+          ),
         );
 
       return indexMethod;
@@ -1546,9 +1599,45 @@ function createTableNamespace<
   }) as TableNamespace<DataModel, Table>;
 }
 
+function createIndexFieldResolver(
+  schema: SchemaDefinition<any, boolean>,
+): IndexFieldResolver {
+  const cache = new Map<string, readonly string[]>();
+
+  return (table, index) => {
+    if (index === 'by_id') {
+      return ['_id'];
+    }
+
+    const cacheKey = `${table}:${index}`;
+    const cached = cache.get(cacheKey);
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    const tableDefinition = (schema.tables as Record<string, { " indexes"(): RuntimeIndexDefinition[] }>)[
+      table
+    ];
+    const indexes = tableDefinition?.[' indexes']();
+    const match = indexes?.find(
+      (candidate) => candidate.indexDescriptor === index,
+    );
+    if (match !== undefined && Array.isArray(match.fields)) {
+      const fields = [...(match.fields as string[])];
+      cache.set(cacheKey, fields);
+      return fields;
+    }
+
+    throw new Error(`Missing schema metadata for index ${table}.${index}`);
+  };
+}
+
 export function createQueryFacade<DataModel extends GenericDataModel>(
   db: GenericDatabaseReader<DataModel>,
+  schema: SchemaDefinition<any, boolean>,
 ): QueryFacade<DataModel> {
+  const resolveIndexFields = createIndexFieldResolver(schema);
+
   return new Proxy(
     {},
     {
@@ -1556,7 +1645,11 @@ export function createQueryFacade<DataModel extends GenericDataModel>(
         if (typeof prop !== 'string' || RESERVED_PROMISE_KEYS.has(prop)) {
           return undefined;
         }
-        return createTableNamespace(db, prop as AppTable<DataModel>);
+        return createTableNamespace(
+          db,
+          prop as AppTable<DataModel>,
+          resolveIndexFields,
+        );
       },
     },
   ) as QueryFacade<DataModel>;
@@ -1567,6 +1660,7 @@ async function queryManyByIndex<DataModel extends GenericDataModel>(
   table: AppTable<DataModel>,
   index: string,
   value: unknown,
+  indexFields?: readonly string[],
 ) {
   if (index === 'by_id') {
     const doc = await (db.query(table) as any)
@@ -1574,11 +1668,12 @@ async function queryManyByIndex<DataModel extends GenericDataModel>(
       .unique();
     return doc ? [doc] : [];
   }
+  const fields = requireIndexFields(index, indexFields);
 
   return await db
     .query(table)
     .withIndex(index as any, (q: any) =>
-      applyIndexValues(q, normalizeIndexValues(index, value)),
+      applyIndexValues(q, normalizeIndexValues(index, value, fields)),
     )
     .collect();
 }

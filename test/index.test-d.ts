@@ -15,7 +15,7 @@ declare const db: GenericDatabaseReader<DataModel>;
 declare const postId: PostId;
 declare const tagId: TagId;
 
-const q = createQueryFacade<DataModel>(db);
+const q = createQueryFacade<DataModel>(db, schema);
 
 describe("convex-relations type surface", () => {
   test("direct id builders support staged composition", () => {

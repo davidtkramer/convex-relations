@@ -26,7 +26,7 @@ describe("convex-relations direct id builders", () => {
     const t = convexTest(schema, modules);
 
     await t.run(async (ctx) => {
-      const q = createQueryFacade(ctx.db);
+      const q = createQueryFacade(ctx.db, schema);
       const authorId = await seedAuthor(ctx, { slug: "ada" });
       const postId = await seedPost(ctx, { authorId, slug: "hello-world" });
 
@@ -59,7 +59,7 @@ describe("convex-relations direct id builders", () => {
     const t = convexTest(schema, modules);
 
     await t.run(async (ctx) => {
-      const q = createQueryFacade(ctx.db);
+      const q = createQueryFacade(ctx.db, schema);
       const authorId = await seedAuthor(ctx, { slug: "nested-take-author" });
       const commenterId = await seedAuthor(ctx, {
         slug: "nested-take-commenter",
@@ -94,7 +94,7 @@ describe("convex-relations table range builders", () => {
     const t = convexTest(schema, modules);
 
     await t.run(async (ctx) => {
-      const q = createQueryFacade(ctx.db);
+      const q = createQueryFacade(ctx.db, schema);
       const authorId = await seedAuthor(ctx, { slug: "grace" });
       const alphaId = await seedPost(ctx, { authorId, slug: "alpha" });
       const betaId = await seedPost(ctx, { authorId, slug: "beta" });
@@ -134,7 +134,7 @@ describe("convex-relations table range builders", () => {
     const t = convexTest(schema, modules);
 
     await t.run(async (ctx) => {
-      const q = createQueryFacade(ctx.db);
+      const q = createQueryFacade(ctx.db, schema);
       const authorId = await seedAuthor(ctx, { slug: "linus" });
       const alphaId = await seedPost(ctx, { authorId, slug: "batch-a" });
       const betaId = await seedPost(ctx, { authorId, slug: "batch-b" });
@@ -159,7 +159,7 @@ describe("convex-relations table range builders", () => {
     const t = convexTest(schema, modules);
 
     await t.run(async (ctx) => {
-      const q = createQueryFacade(ctx.db);
+      const q = createQueryFacade(ctx.db, schema);
       const authorId = await seedAuthor(ctx, { slug: "margaret" });
       await seedPost(ctx, { authorId, slug: "take-a" });
       await seedPost(ctx, { authorId, slug: "take-b" });
@@ -177,7 +177,7 @@ describe("convex-relations table range builders", () => {
     const t = convexTest(schema, modules);
 
     await t.run(async (ctx) => {
-      const q = createQueryFacade(ctx.db);
+      const q = createQueryFacade(ctx.db, schema);
 
       expect(await q.posts.uniqueOrNull()).toBeNull();
       await expect(q.posts.unique()).rejects.toThrow(/Could not find posts/);
@@ -210,7 +210,7 @@ describe("convex-relations table range builders", () => {
     const t = convexTest(schema, modules);
 
     await t.run(async (ctx) => {
-      const q = createQueryFacade(ctx.db);
+      const q = createQueryFacade(ctx.db, schema);
       const table = q.posts;
 
       expect((table as any).then).toBeUndefined();
@@ -224,7 +224,7 @@ describe("convex-relations indexed builders", () => {
     const t = convexTest(schema, modules);
 
     await t.run(async (ctx) => {
-      const q = createQueryFacade(ctx.db);
+      const q = createQueryFacade(ctx.db, schema);
       const slug = "octavia";
       const authorId = await seedAuthor(ctx, { slug });
       const postId = await seedPost(ctx, { authorId, slug: "indexed-post" });
@@ -265,7 +265,7 @@ describe("convex-relations indexed builders", () => {
     const t = convexTest(schema, modules);
 
     await t.run(async (ctx) => {
-      const q = createQueryFacade(ctx.db);
+      const q = createQueryFacade(ctx.db, schema);
       const postAuthorId = await seedAuthor(ctx, { slug: "ursula" });
       const commentAuthorA = await seedAuthor(ctx, { slug: "commenter-a" });
       const commentAuthorB = await seedAuthor(ctx, { slug: "commenter-b" });
@@ -321,7 +321,7 @@ describe("convex-relations indexed builders", () => {
     const t = convexTest(schema, modules);
 
     await t.run(async (ctx) => {
-      const q = createQueryFacade(ctx.db);
+      const q = createQueryFacade(ctx.db, schema);
       const withReputationId = await seedAuthor(ctx, {
         slug: "experienced",
         reputation: 10,
@@ -352,7 +352,7 @@ describe("convex-relations indexed builders", () => {
     const t = convexTest(schema, modules);
 
     await t.run(async (ctx) => {
-      const q = createQueryFacade(ctx.db);
+      const q = createQueryFacade(ctx.db, schema);
       const firstTagId = await seedTag(ctx, { slug: "tag-a" });
       const secondTagId = await seedTag(ctx, { slug: "tag-b" });
 
@@ -369,11 +369,50 @@ describe("convex-relations indexed builders", () => {
     });
   });
 
+  test("support shorthand lookups for custom index names and acronym fields", async () => {
+    const t = convexTest(schema, modules);
+
+    await t.run(async (ctx) => {
+      const q = createQueryFacade(ctx.db, schema);
+      const firstTagId = await seedTag(ctx, {
+        slug: "lookup-a",
+        url: "https://example.com/a",
+      });
+      const secondTagId = await seedTag(ctx, {
+        slug: "lookup-b",
+        url: "https://example.com/b",
+      });
+
+      const byCustomName = await q.tags.lookupSlug("lookup-a").many();
+      const byCustomNameBatch = await q.tags.lookupSlug
+        .in(["lookup-a", "lookup-b"])
+        .many();
+      const byAcronymField = await q.tags.byURL("https://example.com/a").many();
+      const byAcronymFieldBatch = await q.tags.byURL
+        .in(["https://example.com/a", "https://example.com/b"])
+        .many();
+
+      expect(byCustomName.map((tag: { _id: string }) => tag._id)).toEqual([
+        firstTagId,
+      ]);
+      expect(byCustomNameBatch.map((tag: { _id: string }) => tag._id)).toEqual([
+        firstTagId,
+        secondTagId,
+      ]);
+      expect(byAcronymField.map((tag: { _id: string }) => tag._id)).toEqual([
+        firstTagId,
+      ]);
+      expect(
+        byAcronymFieldBatch.map((tag: { _id: string }) => tag._id),
+      ).toEqual([firstTagId, secondTagId]);
+    });
+  });
+
   test("support indexed batch lookups on non-unique indexes", async () => {
     const t = convexTest(schema, modules);
 
     await t.run(async (ctx) => {
-      const q = createQueryFacade(ctx.db);
+      const q = createQueryFacade(ctx.db, schema);
       const firstAuthorId = await seedAuthor(ctx, { slug: "batch-author-a" });
       const secondAuthorId = await seedAuthor(ctx, { slug: "batch-author-b" });
       const firstPostId = await seedPost(ctx, {
@@ -407,7 +446,7 @@ describe("convex-relations through builders", () => {
     const t = convexTest(schema, modules);
 
     await t.run(async (ctx) => {
-      const q = createQueryFacade(ctx.db);
+      const q = createQueryFacade(ctx.db, schema);
       const authorId = await seedAuthor(ctx, { slug: "jane" });
       const postId = await seedPost(ctx, { authorId, slug: "tagged-post" });
       const secondPostId = await seedPost(ctx, {
