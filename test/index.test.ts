@@ -439,6 +439,67 @@ describe("convex-relations indexed builders", () => {
       ]);
     });
   });
+  test("support partial positional prefixes on compound indexes", async () => {
+    const t = convexTest(schema, modules);
+
+    await t.run(async (ctx) => {
+      const q = createQueryFacade(ctx.db, schema);
+      const firstAuthorId = await seedAuthor(ctx, { slug: "prefix-author-a" });
+      const secondAuthorId = await seedAuthor(ctx, { slug: "prefix-author-b" });
+      const postId = await seedPost(ctx, {
+        authorId: firstAuthorId,
+        slug: "prefix-post",
+      });
+      const firstApprovedId = await seedComment(ctx, {
+        postId,
+        authorId: firstAuthorId,
+        status: "approved",
+      });
+      const secondApprovedId = await seedComment(ctx, {
+        postId,
+        authorId: secondAuthorId,
+        status: "approved",
+      });
+      const pendingId = await seedComment(ctx, {
+        postId,
+        authorId: firstAuthorId,
+        status: "pending",
+      });
+
+      const byOneArg = await q.comments
+        .byPostIdAndStatusAndAuthorId(postId)
+        .many();
+      const byTwoArgs = await q.comments
+        .byPostIdAndStatusAndAuthorId(postId, "approved")
+        .many();
+      const byFullArity = await q.comments
+        .byPostIdAndStatusAndAuthorId(postId, "approved", secondAuthorId)
+        .many();
+      const byBatchPrefix = await q.comments.byPostIdAndStatusAndAuthorId
+        .in([
+          [postId, "pending"],
+          [postId, "approved", firstAuthorId],
+        ])
+        .many();
+
+      expect(byOneArg.map((comment) => comment._id)).toEqual([
+        firstApprovedId,
+        secondApprovedId,
+        pendingId,
+      ]);
+      expect(byTwoArgs.map((comment) => comment._id)).toEqual([
+        firstApprovedId,
+        secondApprovedId,
+      ]);
+      expect(byFullArity.map((comment) => comment._id)).toEqual([
+        secondApprovedId,
+      ]);
+      expect(byBatchPrefix.map((comment) => comment._id)).toEqual([
+        pendingId,
+        firstApprovedId,
+      ]);
+    });
+  });
 });
 
 describe("convex-relations through builders", () => {
