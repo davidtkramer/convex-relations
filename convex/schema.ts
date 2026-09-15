@@ -25,7 +25,8 @@ const schema = defineSchema({
     status: v.union(v.literal("pending"), v.literal("approved")),
   })
     .index("byPostId", ["postId"])
-    .index("byPostIdAndStatus", ["postId", "status"]),
+    .index("byPostIdAndStatus", ["postId", "status"])
+    .index("byPostIdAndStatusAndAuthorId", ["postId", "status", "authorId"]),
   tags: defineTable({
     slug: v.string(),
     name: v.string(),

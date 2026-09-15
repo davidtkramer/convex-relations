@@ -635,7 +635,9 @@ function normalizeIndexValues(
   indexFields: readonly string[],
 ) {
   if (Array.isArray(value)) {
-    return Object.fromEntries(indexFields.map((field, index) => [field, value[index]]));
+    return Object.fromEntries(
+      indexFields.slice(0, value.length).map((field, index) => [field, value[index]]),
+    );
   }
 
   if (isPlainObject(value)) {
