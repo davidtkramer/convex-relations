@@ -551,11 +551,6 @@ Prefer the database-side `filter(...)` and `order(...)` on the range query when
 the condition only involves the row's own fields; in-memory shaping still loads
 and expands every row before discarding it.
 
-`take(count)` bounds the rows loaded, and in-memory steps run on that bounded
-set. `take(10).filter(...)` returns the rows among the first ten that pass, not
-the first ten rows that pass, and `take(10).sort(...)` sorts the first ten, not
-the top ten.
-
 ## Error Semantics
 
 - `find(...)` throws if the document is missing
