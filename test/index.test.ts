@@ -589,3 +589,96 @@ describe("convex-relations through builders", () => {
     });
   });
 });
+
+describe("convex-relations in-memory shaping", () => {
+  test("filter and sort run after expansion and keep the node lazy", async () => {
+    const t = convexTest(schema, modules);
+
+    await t.run(async (ctx) => {
+      const q = createQueryFacade(ctx.db, schema);
+      const highAuthorId = await seedAuthor(ctx, { slug: "high", reputation: 10 });
+      const lowAuthorId = await seedAuthor(ctx, { slug: "low", reputation: 1 });
+      const postId = await seedPost(ctx, { authorId: highAuthorId, slug: "shaped" });
+      const pendingId = await seedComment(ctx, {
+        postId,
+        authorId: highAuthorId,
+        status: "pending",
+      });
+      const lowApprovedId = await seedComment(ctx, {
+        postId,
+        authorId: lowAuthorId,
+        status: "approved",
+      });
+      const highApprovedId = await seedComment(ctx, {
+        postId,
+        authorId: highAuthorId,
+        status: "approved",
+      });
+
+      // Predicate reads an expanded relation, so it must run after with(...).
+      const approvedByReputation = await q.comments
+        .byPostId(postId)
+        .with((comment) => ({ author: q.authors.find(comment.authorId) }))
+        .many()
+        .filter((comment) => comment.status === "approved")
+        .sort((a, b) => b.author.reputation - a.author.reputation);
+      expect(approvedByReputation.map((comment) => comment._id)).toEqual([
+        highApprovedId,
+        lowApprovedId,
+      ]);
+
+      // Filtering a take(...) bounds to the rows loaded, not to matches.
+      const takenThenFiltered = await q.comments
+        .byPostId(postId)
+        .take(1)
+        .filter((comment) => comment.status === "approved");
+      expect(takenThenFiltered).toHaveLength(0);
+
+      // A shaped node still resolves inside with(...).
+      const post = await q.posts.find(postId).with((post) => ({
+        approvedComments: q.comments
+          .byPostId(post._id)
+          .many()
+          .filter((comment) => comment.status === "approved")
+          .sort((a, b) => a.body.localeCompare(b.body)),
+      }));
+      expect(post.approvedComments.map((comment) => comment._id)).toEqual([
+        lowApprovedId,
+        highApprovedId,
+      ]);
+
+      // A shaped node is still a valid through(...) source.
+      const approvedAuthors = await q.authors
+        .through(
+          q.comments
+            .byPostId(postId)
+            .many()
+            .filter((comment) => comment.status === "approved"),
+          "authorId",
+        )
+        .with((author, { source }) => ({ comment: source }));
+      expect(approvedAuthors.map((author) => author.comment._id)).toEqual([
+        lowApprovedId,
+        highApprovedId,
+      ]);
+      expect(approvedAuthors.map((author) => author._id)).toEqual([
+        lowAuthorId,
+        highAuthorId,
+      ]);
+
+      // sort(...) does not mutate what a prior node resolved to.
+      const unsorted = q.comments.byPostId(postId).many();
+      const sorted = unsorted.sort((a, b) => b.body.localeCompare(a.body));
+      expect((await unsorted).map((comment) => comment._id)).toEqual([
+        pendingId,
+        lowApprovedId,
+        highApprovedId,
+      ]);
+      expect((await sorted).map((comment) => comment._id)).toEqual([
+        highApprovedId,
+        lowApprovedId,
+        pendingId,
+      ]);
+    });
+  });
+});

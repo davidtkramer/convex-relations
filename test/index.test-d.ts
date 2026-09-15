@@ -333,4 +333,40 @@ describe("convex-relations type surface", () => {
       })
       .many();
   });
+
+  test("in-memory filter narrows with a type predicate and keeps the node shape", () => {
+    type Comment = DataModel["comments"]["document"];
+    type Author = DataModel["authors"]["document"];
+
+    const withAuthor = q.comments
+      .byPostId(postId)
+      .with((comment) => ({ author: q.authors.findOrNull(comment.authorId) }))
+      .many()
+      .filter(
+        (comment): comment is typeof comment & { author: Author } =>
+          comment.author !== null,
+      )
+      .sort((a, b) => b.author.reputation - a.author.reputation);
+    expectTypeOf<Awaited<typeof withAuthor>[number]["author"]>().toEqualTypeOf<Author>();
+    expectTypeOf<Awaited<typeof withAuthor>[number]["status"]>().toEqualTypeOf<
+      Comment["status"]
+    >();
+
+    const unnarrowed = q.comments
+      .byPostId(postId)
+      .take(5)
+      .filter((comment) => comment.status === "approved");
+    expectTypeOf<Awaited<typeof unnarrowed>>().toEqualTypeOf<Comment[]>();
+
+    const throughShaped = q.authors
+      .through(
+        q.comments
+          .byPostId(postId)
+          .many()
+          .filter((comment) => comment.status === "approved"),
+        "authorId",
+      )
+      .with((author, { source }) => ({ comment: source }));
+    expectTypeOf<Awaited<typeof throughShaped>[number]["comment"]>().toEqualTypeOf<Comment>();
+  });
 });
