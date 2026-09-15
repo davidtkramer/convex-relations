@@ -249,7 +249,17 @@ type FirstOrNullQueryBuilder<Item> = SingleQueryBuilder<Item, true>;
 type FindQueryBuilder<Item> = ExpandableSingleQueryBuilder<Item, false>;
 type FindOrNullQueryBuilder<Item> = ExpandableSingleQueryBuilder<Item, true>;
 
-type ManyQueryBuilder<Item> = QueryNode<Item[]> & ThroughNodeHandle<Item, 'many'>;
+// In-memory shaping runs after the rows (and any with(...) expansions) are
+// loaded, so predicates and comparators can read expanded relations. The
+// result is still a lazy node and a valid through(...) source.
+type ManyQueryBuilder<Item> = QueryNode<Item[]> &
+  ThroughNodeHandle<Item, 'many'> & {
+    filter<Narrowed extends Item>(
+      predicate: (item: Item, index: number) => item is Narrowed,
+    ): ManyQueryBuilder<Narrowed>;
+    filter(predicate: (item: Item, index: number) => unknown): ManyQueryBuilder<Item>;
+    sort(compare: (a: Item, b: Item) => number): ManyQueryBuilder<Item>;
+  };
 type BatchQueryBuilder<Item> = ManyQueryBuilder<Item>;
 
 type BatchQueryFacade<Item> = {
@@ -1031,6 +1041,14 @@ function createManyQueryBuilder<Item>(
   return {
     ...createQueryNode(executeRoot),
     _throughSourceKind: 'many',
+    filter(predicate: (item: Item, index: number) => unknown) {
+      return createManyQueryBuilder(async () =>
+        (await executeRoot()).filter((item, index) => predicate(item, index)),
+      );
+    },
+    sort(compare: (a: Item, b: Item) => number) {
+      return createManyQueryBuilder(async () => [...(await executeRoot())].sort(compare));
+    },
   } as ManyQueryBuilder<Item>;
 }
 

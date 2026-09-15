@@ -123,6 +123,7 @@ That works, but you are responsible for:
 - [Relation Expansion with `with(...)`](#relation-expansion-with-with)
 - [Reference Traversal with `through(...)`](#reference-traversal-with-through)
 - [Terminals](#terminals)
+- [In-Memory Shaping](#in-memory-shaping)
 - [Error Semantics](#error-semantics)
 - [Performance Characteristics](#performance-characteristics)
 - [Comparison to `convex-helpers/server/relationships`](#comparison-to-convex-helpersserverrelationships)
@@ -512,6 +513,43 @@ const page = await q.posts.byAuthorId(authorId).paginate({
   numItems: 25,
 });
 ```
+
+## In-Memory Shaping
+
+`many()` and `take(count)` return lazy nodes. Chain `filter(...)` or `sort(...)`
+on them to shape the loaded rows in memory before the node resolves. Both run
+after `with(...)` expansions, so they can read expanded relations, which the
+database-side `filter(...)` on a range query cannot.
+
+```ts
+const comments = await q.comments
+  .byPostId(postId)
+  .with((comment) => ({ author: q.authors.findOrNull(comment.authorId) }))
+  .many()
+  .filter((comment): comment is typeof comment & { author: Author } =>
+    comment.author !== null,
+  )
+  .sort((a, b) => b.author.reputation - a.author.reputation);
+```
+
+A type-predicate `filter(...)` narrows the result type. `sort(...)` requires a
+comparator and never mutates the loaded array.
+
+The shaped node is still a lazy node: it works as a `with(...)` value and as a
+`through(...)` source.
+
+```ts
+const post = await q.posts.find(postId).with((post) => ({
+  approvedComments: q.comments
+    .byPostId(post._id)
+    .many()
+    .filter((comment) => comment.status === "approved"),
+}));
+```
+
+Prefer the database-side `filter(...)` and `order(...)` on the range query when
+the condition only involves the row's own fields; in-memory shaping still loads
+and expands every row before discarding it.
 
 ## Error Semantics
 
