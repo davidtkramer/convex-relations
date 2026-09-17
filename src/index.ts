@@ -1548,31 +1548,28 @@ function createBatchPlan(
 // its rows once, in the position of its first occurrence.
 function uniqueBatchValues(values: unknown[]): unknown[] {
   const seenScalars = new Set<unknown>();
-  const seenComposites: unknown[] = [];
+  const seenTuples: unknown[][] = [];
   return values.filter((value) => {
-    if (typeof value !== 'object' || value === null) {
+    if (!Array.isArray(value)) {
       if (seenScalars.has(value)) return false;
       seenScalars.add(value);
       return true;
     }
-    if (seenComposites.some((other) => sameBatchValue(other, value))) return false;
-    seenComposites.push(value);
+    if (seenTuples.some((other) => sameBatchValue(other, value))) return false;
+    seenTuples.push(value);
     return true;
   });
 }
 
+// Compound-index batches take positional tuples, which a Set would compare
+// by reference.
 function sameBatchValue(a: unknown, b: unknown): boolean {
-  if (Array.isArray(a) && Array.isArray(b)) {
-    return a.length === b.length && a.every((item, index) => Object.is(item, b[index]));
-  }
-  if (isPlainObject(a) && isPlainObject(b)) {
-    const keys = Object.keys(a);
-    return (
-      keys.length === Object.keys(b).length &&
-      keys.every((key) => key in b && Object.is(a[key], b[key]))
-    );
-  }
-  return Object.is(a, b);
+  return (
+    Array.isArray(a) &&
+    Array.isArray(b) &&
+    a.length === b.length &&
+    a.every((item, index) => Object.is(item, b[index]))
+  );
 }
 
 function isCollectionSource(value: unknown): value is QueryPlanHandle<any, any> {
