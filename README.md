@@ -401,9 +401,18 @@ const posts = await q.posts.in(postIds).many();
 const categories = await q.categories.bySlug
   .in(["typescript", "convex"])
   .many();
+
+// Compound indexes take positional prefixes, one tuple per lookup.
+const comments = await q.comments.byPostIdAndStatus
+  .in([
+    [postId, "approved"],
+    [otherPostId, "pending"],
+  ])
+  .many();
 ```
 
-Batch lookups skip missing rows.
+Each value runs as its own index query, in parallel; results are concatenated
+in list order. Batch lookups skip missing rows and dedupe the values.
 
 ## Relation Expansion with `with(...)`
 

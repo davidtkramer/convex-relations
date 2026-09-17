@@ -155,6 +155,38 @@ describe("convex-relations table range builders", () => {
     });
   });
 
+  test("batch lookups drop duplicate values and keep first-occurrence order", async () => {
+    const t = convexTest(schema, modules);
+
+    await t.run(async (ctx) => {
+      const q = createQueryFacade(ctx.db, schema);
+      const authorId = await seedAuthor(ctx, { slug: "dedupe" });
+      const alphaId = await seedPost(ctx, { authorId, slug: "dedupe-a" });
+      const betaId = await seedPost(ctx, { authorId, slug: "dedupe-b" });
+      const pendingId = await seedComment(ctx, {
+        postId: alphaId,
+        authorId,
+        status: "pending",
+      });
+
+      const byId = await q.posts.in([betaId, alphaId, betaId]).many();
+      expect(byId.map((post) => post._id)).toEqual([betaId, alphaId]);
+
+      const bySlug = await q.posts.bySlug
+        .in(["dedupe-a", "dedupe-a", "dedupe-b"])
+        .many();
+      expect(bySlug.map((post) => post._id)).toEqual([alphaId, betaId]);
+
+      const byTuple = await q.comments.byPostIdAndStatus
+        .in([
+          [alphaId, "pending"],
+          [alphaId, "pending"],
+        ])
+        .many();
+      expect(byTuple.map((comment) => comment._id)).toEqual([pendingId]);
+    });
+  });
+
   test("support take and paginate", async () => {
     const t = convexTest(schema, modules);
 

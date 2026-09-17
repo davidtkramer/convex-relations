@@ -1539,9 +1539,37 @@ function createBatchPlan(
     kind: 'batch',
     table,
     index,
-    values,
+    values: uniqueBatchValues(values),
     indexFields,
   });
+}
+
+// `.in(...)` is set membership, like SQL's IN: a value listed twice matches
+// its rows once, in the position of its first occurrence.
+function uniqueBatchValues(values: unknown[]): unknown[] {
+  const seenScalars = new Set<unknown>();
+  const seenTuples: unknown[][] = [];
+  return values.filter((value) => {
+    if (!Array.isArray(value)) {
+      if (seenScalars.has(value)) return false;
+      seenScalars.add(value);
+      return true;
+    }
+    if (seenTuples.some((other) => sameBatchValue(other, value))) return false;
+    seenTuples.push(value);
+    return true;
+  });
+}
+
+// Compound-index batches take positional tuples, which a Set would compare
+// by reference.
+function sameBatchValue(a: unknown, b: unknown): boolean {
+  return (
+    Array.isArray(a) &&
+    Array.isArray(b) &&
+    a.length === b.length &&
+    a.every((item, index) => Object.is(item, b[index]))
+  );
 }
 
 function isCollectionSource(value: unknown): value is QueryPlanHandle<any, any> {
