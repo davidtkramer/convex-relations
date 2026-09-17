@@ -369,4 +369,59 @@ describe("convex-relations type surface", () => {
       .with((author, { source }) => ({ comment: source }));
     expectTypeOf<Awaited<typeof throughShaped>[number]["comment"]>().toEqualTypeOf<Comment>();
   });
+
+  test("index equality on a union table narrows to the variants it can return", () => {
+    type Activity = DataModel["activities"]["document"];
+    type View = Extract<Activity, { kind: "view" }>;
+    type Share = Extract<Activity, { kind: "share" }>;
+    type Moderation = Extract<Activity, { kind: "flag" | "report" }>;
+
+    // A literal discriminant picks the variant.
+    const views = q.activities.byKind("view").many();
+    expectTypeOf<Awaited<typeof views>>().toEqualTypeOf<View[]>();
+
+    // A literal that several variants can hold keeps all of them.
+    const flags = q.activities.byPostIdAndKind(postId, "flag").many();
+    expectTypeOf<Awaited<typeof flags>>().toEqualTypeOf<Moderation[]>();
+
+    // A field only some variants carry narrows by presence, whatever the value.
+    const pending = q.activities.byPostIdAndStatus(postId, "pending").many();
+    expectTypeOf<Awaited<typeof pending>>().toEqualTypeOf<Moderation[]>();
+    const status = null as any as "pending" | "resolved";
+    const byStatus = q.activities.byStatus(status).first();
+    expectTypeOf<Awaited<typeof byStatus>>().toEqualTypeOf<Moderation>();
+
+    // A prefix that stops before the discriminant does not narrow.
+    const byPost = q.activities.byPostIdAndKind(postId).many();
+    expectTypeOf<Awaited<typeof byPost>>().toEqualTypeOf<Activity[]>();
+
+    // eq on an optional field with undefined can return rows without the field.
+    const noNote = q.activities.byNote(undefined).many();
+    expectTypeOf<Awaited<typeof noNote>>().toEqualTypeOf<Activity[]>();
+    const noted = q.activities.byNote("spam").many();
+    expectTypeOf<Awaited<typeof noted>>().toEqualTypeOf<Moderation[]>();
+
+    // Batch entrypoints narrow on the union of their values.
+    const taps = q.activities.byKind.in(["view", "share"]).many();
+    expectTypeOf<Awaited<typeof taps>>().toEqualTypeOf<(View | Share)[]>();
+
+    // Relations attach to the narrowed item.
+    const shares = q.activities
+      .byKind("share")
+      .with((activity) => ({ post: q.posts.find(activity.postId) }))
+      .many();
+    expectTypeOf<Awaited<typeof shares>[number]["channel"]>().toEqualTypeOf<string>();
+
+    // Variant-only index fields are typed by the variants that carry them.
+    // @ts-expect-error status is a literal union, not a number
+    q.activities.byStatus(123);
+    // @ts-expect-error kind never holds this value
+    q.activities.byKind("like");
+
+    // Non-union tables are unchanged.
+    const approved = q.comments.byPostIdAndStatus(postId, "approved").many();
+    expectTypeOf<Awaited<typeof approved>>().toEqualTypeOf<
+      DataModel["comments"]["document"][]
+    >();
+  });
 });

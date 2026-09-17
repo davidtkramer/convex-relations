@@ -66,6 +66,50 @@ type SingleIndexField<
 ]
     ? Field
     : never;
+// Looks a field up on each member of a union document, so a field that only
+// some variants carry types as that variant's field rather than as `any`.
+type DocFieldType<Doc, Field extends string> = Doc extends unknown
+  ? Field extends keyof Doc
+    ? Doc[Field]
+    : never
+  : never;
+type Overlaps<A, B> = [Extract<A, B> | Extract<B, A>] extends [never] ? false : true;
+// The variants an index equality on Field = Value can return: those whose
+// field can hold the value, and, when the value may be undefined, those
+// without the field (Convex indexes a missing field as undefined).
+type VariantsMatching<Doc, Field extends string, Value> = Doc extends unknown
+  ? Field extends keyof Doc
+    ? Overlaps<Doc[Field], Value> extends true
+      ? Doc
+      : never
+    : undefined extends Value
+      ? Doc
+      : never
+  : never;
+type NarrowByIndexArgs<
+  Doc,
+  Fields extends readonly string[],
+  Args extends readonly unknown[],
+> = Args extends readonly [infer Value, ...infer RestArgs]
+  ? Fields extends readonly [
+      infer Field extends string,
+      ...infer RestFields extends readonly string[],
+    ]
+    ? NarrowByIndexArgs<VariantsMatching<Doc, Field, Value>, RestFields, RestArgs>
+    : Doc
+  : Doc;
+type NarrowedIndexItem<
+  DataModel extends GenericDataModel,
+  Table extends AppTable<DataModel>,
+  IndexName extends TableIndexName<DataModel, Table>,
+  Args extends readonly unknown[],
+> = IndexName extends UserIndex<DataModel, Table>
+  ? NarrowByIndexArgs<
+      AppDoc<DataModel, Table>,
+      UserIndexFields<DataModel, Table, IndexName>,
+      Args
+    >
+  : AppDoc<DataModel, Table>;
 type TuplePrefixArgs<
   DataModel extends GenericDataModel,
   Table extends AppTable<DataModel>,
@@ -77,13 +121,13 @@ type TuplePrefixArgs<
   ...infer Tail extends readonly string[],
 ]
   ?
-      | [...SeenValues, AppDoc<DataModel, Table>[Head]]
+      | [...SeenValues, DocFieldType<AppDoc<DataModel, Table>, Head>]
       | TuplePrefixArgs<
           DataModel,
           Table,
           Tail,
           [...Seen, Head],
-          [...SeenValues, AppDoc<DataModel, Table>[Head]]
+          [...SeenValues, DocFieldType<AppDoc<DataModel, Table>, Head>]
         >
   : never;
 type PositionalIndexArgs<
@@ -99,7 +143,7 @@ export type RootIndexValueArg<
   | PositionalIndexArgs<DataModel, Table, IndexName>
   | (SingleIndexField<DataModel, Table, IndexName> extends never
       ? never
-      : AppDoc<DataModel, Table>[SingleIndexField<DataModel, Table, IndexName>]);
+      : DocFieldType<AppDoc<DataModel, Table>, SingleIndexField<DataModel, Table, IndexName>>);
 export type StrictRootIndexValueArg<
   DataModel extends GenericDataModel,
   Table extends AppTable<DataModel>,
@@ -116,7 +160,7 @@ type UserIndexArg<
   IndexName extends UserIndex<DataModel, Table>,
 > = SingleIndexField<DataModel, Table, IndexName> extends never
   ? PositionalIndexArgs<DataModel, Table, IndexName>
-  : AppDoc<DataModel, Table>[SingleIndexField<DataModel, Table, IndexName>];
+  : DocFieldType<AppDoc<DataModel, Table>, SingleIndexField<DataModel, Table, IndexName>>;
 type TableIndexValueArg<
   DataModel extends GenericDataModel,
   Table extends AppTable<DataModel>,
@@ -439,11 +483,20 @@ type TableNamespace<
       ): TableQueryFacade<DataModel, Table>;
       <const Args extends TableIndexInvocationArgs<DataModel, Table, IndexName>>(
         ...args: Args
-      ): TableQueryFacade<DataModel, Table>;
+      ): TableQueryFacade<DataModel, Table, NarrowedIndexItem<DataModel, Table, IndexName, Args>>;
       (): TableRangeQueryFacade<DataModel, Table>;
       in<const Value extends TableIndexValueArg<DataModel, Table, IndexName>>(
         values: StrictTableIndexValueArg<DataModel, Table, IndexName, Value>[],
-      ): TableBatchQueryFacade<DataModel, Table>;
+      ): TableBatchQueryFacade<
+        DataModel,
+        Table,
+        NarrowedIndexItem<
+          DataModel,
+          Table,
+          IndexName,
+          Value extends readonly unknown[] ? Value : [Value]
+        >
+      >;
     };
   };
 
