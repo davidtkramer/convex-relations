@@ -540,6 +540,82 @@ describe("convex-relations indexed builders", () => {
       ]);
     });
   });
+
+  test("support positional lookups on dot-path index fields", async () => {
+    const t = convexTest(schema, modules);
+
+    await t.run(async (ctx) => {
+      const q = createQueryFacade(ctx.db, schema);
+      const adaId = await seedAuthor(ctx, { slug: "dot-path-ada" });
+      const graceId = await seedAuthor(ctx, { slug: "dot-path-grace" });
+      const postId = await seedPost(ctx, { authorId: adaId, slug: "dot-path-post" });
+
+      const darkId = await ctx.db.insert("profiles", {
+        authorId: adaId,
+        settings: { theme: "dark" },
+      });
+      const lightId = await ctx.db.insert("profiles", {
+        authorId: graceId,
+        settings: { theme: "light", digest: "weekly" },
+      });
+
+      const announcementId = await ctx.db.insert("notifications", {
+        kind: "announcement",
+        to: adaId,
+        sentAt: 1,
+        payload: { postId },
+      });
+      const followId = await ctx.db.insert("notifications", {
+        kind: "new_follower",
+        to: adaId,
+        sentAt: 2,
+        payload: { followerId: graceId },
+      });
+      const otherFollowId = await ctx.db.insert("notifications", {
+        kind: "new_follower",
+        to: graceId,
+        sentAt: 3,
+        payload: { followerId: adaId },
+      });
+
+      const dark = await q.profiles.byTheme("dark").many();
+      const graceLight = await q.profiles.byAuthorIdAndTheme(graceId, "light").unique();
+      const adaLight = await q.profiles.byAuthorIdAndTheme(adaId, "light").uniqueOrNull();
+      const noDigest = await q.profiles.byDigest(undefined).many();
+      const themes = await q.profiles.byTheme.in(["light", "dark"]).many();
+
+      const toAda = await q.notifications.byToAndFollowerId(adaId).many();
+      const follow = await q.notifications.byToAndFollowerId(adaId, graceId).unique();
+      const notFollows = await q.notifications.byToAndFollowerId(adaId, undefined).many();
+      const announced = await q.notifications
+        .byKindAndPostId("announcement", postId)
+        .many();
+      const follows = await q.notifications.byToAndFollowerId
+        .in([
+          [graceId, adaId],
+          [adaId, graceId],
+        ])
+        .many();
+
+      expect(dark.map((profile) => profile._id)).toEqual([darkId]);
+      expect(graceLight._id).toBe(lightId);
+      expect(adaLight).toBeNull();
+      expect(noDigest.map((profile) => profile._id)).toEqual([darkId]);
+      expect(themes.map((profile) => profile._id)).toEqual([lightId, darkId]);
+
+      expect(toAda.map((notification) => notification._id).sort()).toEqual(
+        [announcementId, followId].sort(),
+      );
+      expect(follow._id).toBe(followId);
+      expect(follow.payload.followerId).toBe(graceId);
+      expect(notFollows.map((notification) => notification._id)).toEqual([announcementId]);
+      expect(announced.map((notification) => notification._id)).toEqual([announcementId]);
+      expect(follows.map((notification) => notification._id)).toEqual([
+        otherFollowId,
+        followId,
+      ]);
+    });
+  });
 });
 
 describe("convex-relations through builders", () => {

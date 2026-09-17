@@ -377,6 +377,35 @@ const pending = await q.activities.byPostIdAndStatus(postId, "pending").many();
 const taps = await q.activities.byKind.in(["view", "share"]).many();
 ```
 
+An index field can be a dot path into a nested object. Its positional argument
+takes the nested field's type, and it narrows the same way: a variant without
+the path holds `undefined` there, so only an `undefined` value can return it.
+
+```ts
+const notifications = defineTable(
+  v.union(
+    v.object({
+      kind: v.literal("new_follower"),
+      to: v.id("users"),
+      payload: v.object({ followerId: v.id("users") }),
+    }),
+    v.object({
+      kind: v.literal("new_comment"),
+      to: v.id("users"),
+      payload: v.object({ commentId: v.id("comments") }),
+    }),
+  ),
+).index("byToAndFollowerId", ["to", "payload.followerId"]);
+
+// Only the new_follower variant has `payload.followerId`.
+const follow = await q.notifications
+  .byToAndFollowerId(userId, followerId)
+  .uniqueOrNull();
+
+// eq(undefined) returns the variants without the path: new_comment here.
+const others = await q.notifications.byToAndFollowerId(userId, undefined).many();
+```
+
 A prefix that stops before the discriminating field, the selector-function
 form, and `.filter(...)` all return the full union. Tables that are not unions
 are unaffected.

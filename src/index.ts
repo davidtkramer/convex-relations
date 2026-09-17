@@ -1,9 +1,11 @@
 import type {
   DocumentByName,
   ExpressionOrValue,
+  FieldTypeFromFieldPath,
   FilterBuilder,
   GenericDatabaseReader,
   GenericDataModel,
+  GenericDocument,
   GenericTableInfo,
   IndexNames,
   IndexRange,
@@ -66,25 +68,23 @@ type SingleIndexField<
 ]
     ? Field
     : never;
-// Looks a field up on each member of a union document, so a field that only
-// some variants carry types as that variant's field rather than as `any`.
-type DocFieldType<Doc, Field extends string> = Doc extends unknown
-  ? Field extends keyof Doc
-    ? Doc[Field]
-    : never
-  : never;
+// The value an index field accepts, which is what Convex's own `q.eq` accepts
+// for it. Field may be a dot path into a nested object ('payload.followerId').
+// On a union document each variant contributes its own field type, and a
+// variant without the field contributes `undefined`, because Convex indexes a
+// missing field as undefined.
+type DocFieldType<
+  Doc extends GenericDocument,
+  Field extends string,
+> = FieldTypeFromFieldPath<Doc, Field>;
 type Overlaps<A, B> = [Extract<A, B> | Extract<B, A>] extends [never] ? false : true;
 // The variants an index equality on Field = Value can return: those whose
-// field can hold the value, and, when the value may be undefined, those
-// without the field (Convex indexes a missing field as undefined).
-type VariantsMatching<Doc, Field extends string, Value> = Doc extends unknown
-  ? Field extends keyof Doc
-    ? Overlaps<Doc[Field], Value> extends true
-      ? Doc
-      : never
-    : undefined extends Value
-      ? Doc
-      : never
+// field can hold the value. A variant without the field holds `undefined`
+// there, so it is kept only when the value may be undefined.
+type VariantsMatching<Doc, Field extends string, Value> = Doc extends GenericDocument
+  ? Overlaps<FieldTypeFromFieldPath<Doc, Field>, Value> extends true
+    ? Doc
+    : never
   : never;
 type NarrowByIndexArgs<
   Doc,
@@ -1620,7 +1620,10 @@ function normalizeIndexSelectorArgs(args: unknown[]) {
   if (args.length === 0) {
     return undefined;
   }
-  if (args.length === 1) {
+  // A lone `undefined` is an equality on the leading field (Convex indexes a
+  // missing field as undefined), so it stays a tuple rather than collapsing
+  // into the "no selector" case, which would scan the whole index.
+  if (args.length === 1 && args[0] !== undefined) {
     return args[0];
   }
   return args;
