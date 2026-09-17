@@ -345,6 +345,42 @@ const exactOrPrefix = await q.comments
   .many();
 ```
 
+### Union tables narrow by index
+
+When a table's document is a `v.union(...)`, a positional lookup narrows the
+result to the variants an index equality can actually return. A variant is
+kept when its field can hold the value, or when it lacks the field and the
+value may be `undefined` (Convex indexes a missing field as `undefined`).
+
+```ts
+const activities = defineTable(
+  v.union(
+    v.object({ postId: v.id("posts"), kind: v.literal("view") }),
+    v.object({ postId: v.id("posts"), kind: v.literal("share"), channel: v.string() }),
+    v.object({
+      postId: v.id("posts"),
+      kind: v.union(v.literal("flag"), v.literal("report")),
+      status: v.union(v.literal("pending"), v.literal("resolved")),
+    }),
+  ),
+)
+  .index("byKind", ["kind"])
+  .index("byPostIdAndStatus", ["postId", "status"]);
+
+// { kind: "share"; channel: string; ... }[]
+const shares = await q.activities.byKind("share").many();
+
+// Only the moderation variant carries `status`, so this narrows too.
+const pending = await q.activities.byPostIdAndStatus(postId, "pending").many();
+
+// `.in(...)` narrows on the union of its values.
+const taps = await q.activities.byKind.in(["view", "share"]).many();
+```
+
+A prefix that stops before the discriminating field, the selector-function
+form, and `.filter(...)` all return the full union. Tables that are not unions
+are unaffected.
+
 ### Indexed lookup by selector function
 
 You can also pass Convex's index selector callback:

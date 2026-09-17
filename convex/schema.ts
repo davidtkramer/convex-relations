@@ -35,6 +35,25 @@ const schema = defineSchema({
     .index("bySlug", ["slug"])
     .index("lookupSlug", ["slug"])
     .index("byURL", ["url"]),
+  // A union table: 'view' and 'share' are activity taps, 'flag' / 'report'
+  // are moderation rows carrying a status the other variants lack.
+  activities: defineTable(
+    v.union(
+      v.object({ postId: v.id("posts"), kind: v.literal("view") }),
+      v.object({ postId: v.id("posts"), kind: v.literal("share"), channel: v.string() }),
+      v.object({
+        postId: v.id("posts"),
+        kind: v.union(v.literal("flag"), v.literal("report")),
+        status: v.union(v.literal("pending"), v.literal("resolved")),
+        note: v.optional(v.string()),
+      }),
+    ),
+  )
+    .index("byKind", ["kind"])
+    .index("byPostIdAndKind", ["postId", "kind"])
+    .index("byStatus", ["status"])
+    .index("byPostIdAndStatus", ["postId", "status"])
+    .index("byNote", ["note"]),
   postsTags: defineTable({
     postId: v.id("posts"),
     tagId: v.id("tags"),
