@@ -1,4 +1,5 @@
 import { convexTest } from "convex-test";
+import { stream } from "convex-helpers/server/stream";
 import type { GenericId } from "convex/values";
 import { beforeEach, describe, expect, test } from "vitest";
 import { createQueryFacade } from "../src/index";
@@ -679,6 +680,79 @@ describe("convex-relations in-memory shaping", () => {
         lowApprovedId,
         pendingId,
       ]);
+    });
+  });
+});
+
+describe("convex-relations stream facades", () => {
+  test("filter while streaming, expand relations, and paginate across pages", async () => {
+    const t = convexTest(schema, modules);
+
+    await t.run(async (ctx) => {
+      const q = createQueryFacade(ctx.db, schema, { stream });
+      const authorId = await seedAuthor(ctx, { slug: "ada" });
+      const postId = await seedPost(ctx, { authorId, slug: "streams" });
+      for (const status of ["approved", "pending", "approved", "pending", "approved"] as const) {
+        await seedComment(ctx, { postId, authorId, status });
+      }
+
+      const approved = q.comments
+        .byPostId(postId)
+        .stream()
+        .filterWith((comment) => comment.status === "approved")
+        .with((comment) => ({ author: q.authors.find(comment.authorId) }));
+
+      const firstPage = await approved.paginate({ numItems: 2, cursor: null });
+      expect(firstPage.page).toHaveLength(2);
+      expect(firstPage.page.every((comment) => comment.status === "approved")).toBe(true);
+      expect(firstPage.page[0].author.slug).toBe("ada");
+      expect(firstPage.isDone).toBe(false);
+
+      const secondPage = await approved.paginate({
+        numItems: 2,
+        cursor: firstPage.continueCursor,
+      });
+      expect(secondPage.page).toHaveLength(1);
+      expect(secondPage.isDone).toBe(true);
+
+      const newestFirst = await q.comments
+        .byPostId(postId)
+        .stream()
+        .filterWith(async (comment) => comment.status === "pending")
+        .order("desc")
+        .many();
+      expect(newestFirst).toHaveLength(2);
+      expect(newestFirst[0]._creationTime).toBeGreaterThan(newestFirst[1]._creationTime);
+    });
+  });
+
+  test("maximumRowsRead caps the scan even when the filter matches nothing", async () => {
+    const t = convexTest(schema, modules);
+
+    await t.run(async (ctx) => {
+      const q = createQueryFacade(ctx.db, schema, { stream });
+      const authorId = await seedAuthor(ctx, { slug: "ada" });
+      const postId = await seedPost(ctx, { authorId, slug: "capped" });
+      for (let index = 0; index < 6; index++) {
+        await seedComment(ctx, { postId, authorId, status: "pending" });
+      }
+
+      const page = await q.comments
+        .byPostId(postId)
+        .stream()
+        .filterWith(() => false)
+        .paginate({ numItems: 10, cursor: null, maximumRowsRead: 4 });
+      expect(page.page).toEqual([]);
+      expect(page.isDone).toBe(false);
+    });
+  });
+
+  test("stream() explains itself when no stream factory was configured", async () => {
+    const t = convexTest(schema, modules);
+
+    await t.run(async (ctx) => {
+      const q = createQueryFacade(ctx.db, schema);
+      expect(() => q.comments.byPostId("x" as PostId).stream()).toThrow(/stream/);
     });
   });
 });

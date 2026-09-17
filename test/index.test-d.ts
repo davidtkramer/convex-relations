@@ -369,4 +369,40 @@ describe("convex-relations type surface", () => {
       .with((author, { source }) => ({ comment: source }));
     expectTypeOf<Awaited<typeof throughShaped>[number]["comment"]>().toEqualTypeOf<Comment>();
   });
+
+  test("stream facades keep index sugar and type filterWith on the raw row", () => {
+    type Comment = DataModel["comments"]["document"];
+    type Author = DataModel["authors"]["document"];
+
+    const page = q.comments
+      .byPostIdAndStatus(postId, "approved")
+      .stream()
+      .order("desc")
+      .filterWith(async (comment) => comment.body.length > 0)
+      .with((comment) => ({ author: q.authors.find(comment.authorId) }))
+      .paginate({ numItems: 10, cursor: null, maximumRowsRead: 100 });
+    expectTypeOf<Awaited<typeof page>["page"][number]["author"]>().toEqualTypeOf<Author>();
+    expectTypeOf<Awaited<typeof page>["page"][number]["status"]>().toEqualTypeOf<
+      Comment["status"]
+    >();
+
+    const all = q.posts.stream().many();
+    expectTypeOf<Awaited<typeof all>>().toEqualTypeOf<DataModel["posts"]["document"][]>();
+
+    // filterWith runs while rows stream in, before with() expansion.
+    q.comments
+      .byPostId(postId)
+      .with((comment) => ({ author: q.authors.find(comment.authorId) }))
+      .stream()
+      .filterWith((comment) => {
+        expectTypeOf(comment).toEqualTypeOf<Comment>();
+        return true;
+      });
+
+    const streamed = q.comments.byPostId(postId).stream();
+    // @ts-expect-error a stream has no db-level filter; use filterWith
+    streamed.filter;
+    // @ts-expect-error maximumRowsRead is a stream-only option
+    q.comments.byPostId(postId).paginate({ numItems: 1, cursor: null, maximumRowsRead: 5 });
+  });
 });

@@ -369,6 +369,35 @@ const categories = await q.categories.bySlug
 
 Batch lookups skip missing rows.
 
+### Streaming with `.stream()`
+
+Any collection query can run through
+[`convex-helpers`' `stream()`](https://github.com/get-convex/convex-helpers#stream)
+by passing that factory when the facade is created:
+
+```ts
+import { stream } from "convex-helpers/server/stream";
+
+const q = createQueryFacade(ctx.db, schema, { stream });
+```
+
+`.stream()` then swaps the db-level `filter()` for `filterWith()`, which runs
+on each row as it is read, and lets `paginate()` cap the scan with
+`maximumRowsRead`:
+
+```ts
+const page = await q.duckLogs
+  .byTypeAndCreatedAt("found")
+  .stream()
+  .order("desc")
+  .filterWith(async (log) => matchesSearch(await ctx.db.get(log.tagId)))
+  .with((log) => ({ tag: q.tags.find(log.tagId) }))
+  .paginate({ ...paginationOpts, maximumRowsRead: 5000 });
+```
+
+`filterWith` sees the raw row: it runs before `with(...)` expands relations.
+Call `order()` before `filterWith()`; a filtered stream cannot be reordered.
+
 ## Relation Expansion with `with(...)`
 
 `with(...)` lets you attach related data or computed fields before a terminal.
