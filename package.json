@@ -1,6 +1,6 @@
 {
   "name": "@davidtkramer/convex-relations",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Typed query facade helpers for Convex backends",
   "type": "module",
   "license": "MIT",
