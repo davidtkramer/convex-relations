@@ -154,13 +154,26 @@ export type StrictRootIndexValueArg<
 type TableIndexName<DataModel extends GenericDataModel, Table extends AppTable<DataModel>> =
   | UserIndex<DataModel, Table>
   | 'by_id';
+type FirstIndexField<
+  DataModel extends GenericDataModel,
+  Table extends AppTable<DataModel>,
+  IndexName extends UserIndex<DataModel, Table>,
+> = UserIndexFields<DataModel, Table, IndexName> extends readonly [
+  infer Field extends string,
+  ...unknown[],
+]
+  ? Field
+  : never;
+// One batch element is one positional call: a prefix tuple, or a bare value
+// standing in for the one-argument call on the leading field.
 type UserIndexArg<
   DataModel extends GenericDataModel,
   Table extends AppTable<DataModel>,
   IndexName extends UserIndex<DataModel, Table>,
-> = SingleIndexField<DataModel, Table, IndexName> extends never
-  ? PositionalIndexArgs<DataModel, Table, IndexName>
-  : DocFieldType<AppDoc<DataModel, Table>, SingleIndexField<DataModel, Table, IndexName>>;
+> =
+  | DocFieldType<AppDoc<DataModel, Table>, FirstIndexField<DataModel, Table, IndexName>>
+  | PositionalIndexArgs<DataModel, Table, IndexName>
+  | Readonly<PositionalIndexArgs<DataModel, Table, IndexName>>;
 type TableIndexValueArg<
   DataModel extends GenericDataModel,
   Table extends AppTable<DataModel>,
@@ -443,7 +456,7 @@ type TableNamespace<
     id: Id,
   ): FindOrNullQueryBuilder<AppDoc<DataModel, Table>>;
   in<const Id extends GenericId<Table>>(
-    ids: Id[],
+    ids: readonly Id[],
   ): TableBatchQueryFacade<DataModel, Table>;
   withIndex<const IndexName extends UserIndex<DataModel, Table>>(
     index: IndexName,
@@ -486,7 +499,7 @@ type TableNamespace<
       ): TableQueryFacade<DataModel, Table, NarrowedIndexItem<DataModel, Table, IndexName, Args>>;
       (): TableRangeQueryFacade<DataModel, Table>;
       in<const Value extends TableIndexValueArg<DataModel, Table, IndexName>>(
-        values: StrictTableIndexValueArg<DataModel, Table, IndexName, Value>[],
+        values: readonly StrictTableIndexValueArg<DataModel, Table, IndexName, Value>[],
       ): TableBatchQueryFacade<
         DataModel,
         Table,
@@ -1532,7 +1545,7 @@ function createQueryPlan(
 function createBatchPlan(
   table: string,
   index: string,
-  values: unknown[],
+  values: readonly unknown[],
   indexFields?: readonly string[],
 ): QueryPlan {
   return createPlan({
@@ -1546,7 +1559,7 @@ function createBatchPlan(
 
 // `.in(...)` is set membership, like SQL's IN: a value listed twice matches
 // its rows once, in the position of its first occurrence.
-function uniqueBatchValues(values: unknown[]): unknown[] {
+function uniqueBatchValues(values: readonly unknown[]): unknown[] {
   const seenScalars = new Set<unknown>();
   const seenTuples: unknown[][] = [];
   return values.filter((value) => {
@@ -1630,7 +1643,7 @@ function createTableNamespace<
     findOrNull(id: GenericId<Table>) {
       return createExpandableSingleFromPlan(db, createIdPlan(table, id), true);
     },
-    in(ids: GenericId<Table>[]) {
+    in(ids: readonly GenericId<Table>[]) {
       return createBatchFacade(db, createBatchPlan(table, 'by_id', ids as never[]));
     },
     withIndex(index: string, selector?: unknown) {
@@ -1694,10 +1707,10 @@ function createTableNamespace<
             resolveIndexFields(table, prop),
           ),
         )) as ((...args: unknown[]) => unknown) & {
-        in: (values: unknown[]) => unknown;
+        in: (values: readonly unknown[]) => unknown;
       };
 
-      indexMethod.in = (values: unknown[]) =>
+      indexMethod.in = (values: readonly unknown[]) =>
         createBatchFacade(
           db,
           createBatchPlan(

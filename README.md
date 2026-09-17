@@ -402,11 +402,13 @@ const categories = await q.categories.bySlug
   .in(["typescript", "convex"])
   .many();
 
-// Compound indexes take positional prefixes, one tuple per lookup.
+// Compound indexes take positional prefixes, one tuple per lookup. A bare
+// value is the one-argument call on the leading field.
 const comments = await q.comments.byPostIdAndStatus
   .in([
     [postId, "approved"],
     [otherPostId, "pending"],
+    thirdPostId,
   ])
   .many();
 ```
