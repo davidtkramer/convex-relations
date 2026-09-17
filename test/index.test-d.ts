@@ -3,7 +3,7 @@ import type {
   GenericDatabaseReader,
 } from "convex/server";
 import { assertType, describe, expectTypeOf, test } from "vitest";
-import { createQueryFacade } from "../src/index";
+import { createQueryFacade, type RootIndexValueArg } from "../src/index";
 import schema from "./schema";
 
 type DataModel = DataModelFromSchemaDefinition<typeof schema>;
@@ -401,6 +401,11 @@ describe("convex-relations type surface", () => {
     const noted = q.activities.byNote("spam").many();
     expectTypeOf<Awaited<typeof noted>>().toEqualTypeOf<Moderation[]>();
 
+    // A field some variants lack holds undefined on them, so eq(undefined)
+    // is accepted, as Convex's q.eq accepts it, and returns only those variants.
+    const noStatus = q.activities.byStatus(undefined).many();
+    expectTypeOf<Awaited<typeof noStatus>>().toEqualTypeOf<(View | Share)[]>();
+
     // Batch entrypoints narrow on the union of their values.
     const taps = q.activities.byKind.in(["view", "share"]).many();
     expectTypeOf<Awaited<typeof taps>>().toEqualTypeOf<(View | Share)[]>();
@@ -437,5 +442,144 @@ describe("convex-relations type surface", () => {
     expectTypeOf<Awaited<typeof approved>>().toEqualTypeOf<
       DataModel["comments"]["document"][]
     >();
+  });
+
+  test("dot-path index fields type as the nested field", () => {
+    type Profile = DataModel["profiles"]["document"];
+    type AuthorId = DataModel["authors"]["document"]["_id"];
+    const authorId = null as any as AuthorId;
+
+    expectTypeOf<RootIndexValueArg<DataModel, "profiles", "byTheme">>().toEqualTypeOf<
+      [string] | string
+    >();
+    const dark = q.profiles.byTheme("dark").many();
+    expectTypeOf<Awaited<typeof dark>>().toEqualTypeOf<Profile[]>();
+    const prefix = q.profiles.byAuthorIdAndTheme(authorId).many();
+    expectTypeOf<Awaited<typeof prefix>>().toEqualTypeOf<Profile[]>();
+    const compound = q.profiles.byAuthorIdAndTheme(authorId, "dark").firstOrNull();
+    expectTypeOf<Awaited<typeof compound>>().toEqualTypeOf<Profile | null>();
+    const batch = q.profiles.byTheme.in(["dark", "light"]).many();
+    expectTypeOf<Awaited<typeof batch>>().toEqualTypeOf<Profile[]>();
+
+    // An optional nested field also accepts undefined, as q.eq does.
+    q.profiles.byDigest("weekly");
+    q.profiles.byDigest(undefined);
+    q.profiles.byDigest((range) => range.eq("settings.digest", undefined));
+
+    // @ts-expect-error theme is a string
+    q.profiles.byTheme(123);
+    // @ts-expect-error theme is required, so it never holds undefined
+    q.profiles.byTheme(undefined);
+    // @ts-expect-error theme is a string
+    q.profiles.byAuthorIdAndTheme(authorId, 123);
+    // @ts-expect-error the leading field is an author id
+    q.profiles.byAuthorIdAndTheme("dark", "dark");
+    // @ts-expect-error digest is a string
+    q.profiles.byDigest(123);
+  });
+
+  test("dot-path index fields on a union table type and narrow by variant", () => {
+    type Notification = DataModel["notifications"]["document"];
+    type Announcement = Extract<Notification, { kind: "announcement" }>;
+    type NewFollower = Extract<Notification, { kind: "new_follower" }>;
+    type NewComment = Extract<Notification, { kind: "new_comment" }>;
+    type AuthorId = DataModel["authors"]["document"]["_id"];
+    const authorId = null as any as AuthorId;
+
+    // A top-level field whose type differs across variants accepts the union
+    // of the variant types, and narrows to the variants that can hold the value.
+    const forAuthor = q.notifications.byToAndSentAt(authorId).many();
+    expectTypeOf<Awaited<typeof forAuthor>>().toEqualTypeOf<Notification[]>();
+    const broadcast = q.notifications.byToAndSentAt("all").many();
+    expectTypeOf<Awaited<typeof broadcast>>().toEqualTypeOf<Announcement[]>();
+    const at = q.notifications.byToAndSentAt(authorId, 1).many();
+    expectTypeOf<Awaited<typeof at>>().toEqualTypeOf<Notification[]>();
+    // @ts-expect-error `to` is an author id or 'all'
+    q.notifications.byToAndSentAt("everyone");
+    // @ts-expect-error sentAt is a number
+    q.notifications.byToAndSentAt(authorId, "now");
+
+    // A dot path only one variant carries: the prefix keeps the union, the
+    // full equality narrows to the variant with the path.
+    const toAuthor = q.notifications.byToAndFollowerId(authorId).many();
+    expectTypeOf<Awaited<typeof toAuthor>>().toEqualTypeOf<Notification[]>();
+    const follow = q.notifications.byToAndFollowerId(authorId, authorId).uniqueOrNull();
+    expectTypeOf<Awaited<typeof follow>>().toEqualTypeOf<NewFollower | null>();
+    const batchFollows = q.notifications.byToAndFollowerId
+      .in([[authorId, authorId]])
+      .many();
+    expectTypeOf<Awaited<typeof batchFollows>>().toEqualTypeOf<NewFollower[]>();
+
+    // The positional form accepts what Convex's q.eq accepts for the path:
+    // the nested type, plus undefined for the variants without it.
+    expectTypeOf<
+      RootIndexValueArg<DataModel, "notifications", "byToAndFollowerId">
+    >().toEqualTypeOf<[AuthorId | "all"] | [AuthorId | "all", AuthorId | undefined]>();
+    q.notifications.byToAndFollowerId((range) =>
+      range.eq("to", authorId).eq("payload.followerId", undefined),
+    );
+    q.notifications.byToAndFollowerId((range) =>
+      // @ts-expect-error q.eq rejects a number for the path too
+      range.eq("to", authorId).eq("payload.followerId", 123),
+    );
+    // @ts-expect-error followerId is an author id
+    q.notifications.byToAndFollowerId(authorId, 123);
+    // @ts-expect-error followerId is an author id, not a post id
+    q.notifications.byToAndFollowerId(authorId, postId);
+
+    // eq(undefined) matches the rows WITHOUT the path, never the ones with it.
+    const notFollows = q.notifications.byToAndFollowerId(authorId, undefined).many();
+    expectTypeOf<Awaited<typeof notFollows>>().toEqualTypeOf<
+      (Announcement | NewComment)[]
+    >();
+    // A value that may be undefined can match every variant.
+    const maybeFollowerId = null as any as AuthorId | undefined;
+    const maybeFollows = q.notifications.byToAndFollowerId(authorId, maybeFollowerId).many();
+    expectTypeOf<Awaited<typeof maybeFollows>>().toEqualTypeOf<Notification[]>();
+    // 'all' and a followerId never occur on the same variant.
+    const impossible = q.notifications.byToAndFollowerId("all", authorId).many();
+    expectTypeOf<Awaited<typeof impossible>>().toEqualTypeOf<never[]>();
+
+    // A discriminant and a dot path in one index narrow together.
+    const comments = q.notifications.byKindAndPostId("new_comment", postId).many();
+    expectTypeOf<Awaited<typeof comments>>().toEqualTypeOf<NewComment[]>();
+    const byKind = q.notifications.byKindAndPostId("announcement").many();
+    expectTypeOf<Awaited<typeof byKind>>().toEqualTypeOf<Announcement[]>();
+    const kind = null as any as Notification["kind"];
+    const aboutPost = q.notifications.byKindAndPostId(kind, postId).many();
+    expectTypeOf<Awaited<typeof aboutPost>>().toEqualTypeOf<
+      (Announcement | NewComment)[]
+    >();
+    const followerWithPost = q.notifications.byKindAndPostId("new_follower", postId).many();
+    expectTypeOf<Awaited<typeof followerWithPost>>().toEqualTypeOf<never[]>();
+    const followerNoPost = q.notifications.byKindAndPostId("new_follower", undefined).many();
+    expectTypeOf<Awaited<typeof followerNoPost>>().toEqualTypeOf<NewFollower[]>();
+
+    // The dot path may lead the index; the discriminant narrows further.
+    const byPost = q.notifications.byPostIdAndKind(postId).many();
+    expectTypeOf<Awaited<typeof byPost>>().toEqualTypeOf<(Announcement | NewComment)[]>();
+    const announced = q.notifications.byPostIdAndKind(postId, "announcement").many();
+    expectTypeOf<Awaited<typeof announced>>().toEqualTypeOf<Announcement[]>();
+    const batchByPost = q.notifications.byPostIdAndKind.in([postId]).many();
+    expectTypeOf<Awaited<typeof batchByPost>>().toEqualTypeOf<
+      (Announcement | NewComment)[]
+    >();
+
+    // Relations attach to the narrowed item, including its nested payload.
+    const withFollower = q.notifications
+      .byToAndFollowerId(authorId, authorId)
+      .with((notification) => ({
+        follower: q.authors.find(notification.payload.followerId),
+      }))
+      .many();
+    expectTypeOf<Awaited<typeof withFollower>>().items.toHaveProperty("follower");
+
+    // The selector-function form still returns the full union.
+    const selected = q.notifications
+      .byToAndFollowerId((range) =>
+        range.eq("to", authorId).eq("payload.followerId", authorId),
+      )
+      .many();
+    expectTypeOf<Awaited<typeof selected>>().toEqualTypeOf<Notification[]>();
   });
 });
