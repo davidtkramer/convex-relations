@@ -313,18 +313,22 @@ type SingleThroughQueryBuilder<
     ): SingleThroughQueryBuilder<ExpandWith<Item, Builder>, SourceItem, Nullable>;
   };
 
+// Raw is the row as the database returns it, before with() expansion; stream
+// facades type filterWith on it because the predicate runs while streaming.
 type TableQueryFacade<
   DataModel extends GenericDataModel,
   Table extends AppTable<DataModel>,
   Item = AppDoc<DataModel, Table>,
+  Raw = Item,
 > = {
   with<Builder extends AnyWithBuilder<Item>>(
     withBuilder: Builder,
-  ): TableQueryFacade<DataModel, Table, ExpandWith<Item, Builder>>;
-  order(direction: 'asc' | 'desc'): TableQueryFacade<DataModel, Table, Item>;
+  ): TableQueryFacade<DataModel, Table, ExpandWith<Item, Builder>, Raw>;
+  order(direction: 'asc' | 'desc'): TableQueryFacade<DataModel, Table, Item, Raw>;
   filter(
     filterer: QueryFilter<TableInfo<DataModel, Table>>,
-  ): TableQueryFacade<DataModel, Table, Item>;
+  ): TableQueryFacade<DataModel, Table, Item, Raw>;
+  stream(): TableStreamFacade<DataModel, Table, Item, Raw>;
   unique(): UniqueQueryBuilder<Item>;
   uniqueOrNull(): UniqueOrNullQueryBuilder<Item>;
   first(): FirstQueryBuilder<Item>;
@@ -338,14 +342,16 @@ type TableRangeQueryFacade<
   DataModel extends GenericDataModel,
   Table extends AppTable<DataModel>,
   Item = AppDoc<DataModel, Table>,
+  Raw = Item,
 > = {
   with<Builder extends AnyWithBuilder<Item>>(
     withBuilder: Builder,
-  ): TableRangeQueryFacade<DataModel, Table, ExpandWith<Item, Builder>>;
-  order(direction: 'asc' | 'desc'): TableRangeQueryFacade<DataModel, Table, Item>;
+  ): TableRangeQueryFacade<DataModel, Table, ExpandWith<Item, Builder>, Raw>;
+  order(direction: 'asc' | 'desc'): TableRangeQueryFacade<DataModel, Table, Item, Raw>;
   filter(
     filterer: QueryFilter<TableInfo<DataModel, Table>>,
-  ): TableRangeQueryFacade<DataModel, Table, Item>;
+  ): TableRangeQueryFacade<DataModel, Table, Item, Raw>;
+  stream(): TableStreamFacade<DataModel, Table, Item, Raw>;
   unique(): UniqueQueryBuilder<Item>;
   uniqueOrNull(): UniqueOrNullQueryBuilder<Item>;
   first(): FirstQueryBuilder<Item>;
@@ -354,6 +360,50 @@ type TableRangeQueryFacade<
   paginate(opts: PaginationOptions): Promise<PaginatedResult<Item>>;
   many(): ManyQueryBuilder<Item>;
 } & QueryPlanHandle<DataModel, Table>;
+
+type StreamPaginationOptions = PaginationOptions & {
+  endCursor?: string | null;
+  maximumRowsRead?: number;
+};
+
+// A query run through convex-helpers' stream(): rows are filtered while they
+// are read, so paginate can cap reads with maximumRowsRead. There is no
+// db-level filter(); filterWith replaces it.
+type TableStreamFacade<
+  DataModel extends GenericDataModel,
+  Table extends AppTable<DataModel>,
+  Item = AppDoc<DataModel, Table>,
+  Raw = Item,
+> = {
+  with<Builder extends AnyWithBuilder<Item>>(
+    withBuilder: Builder,
+  ): TableStreamFacade<DataModel, Table, ExpandWith<Item, Builder>, Raw>;
+  order(direction: 'asc' | 'desc'): TableStreamFacade<DataModel, Table, Item, Raw>;
+  filterWith(
+    predicate: (row: Raw) => boolean | Promise<boolean>,
+  ): TableStreamFacade<DataModel, Table, Item, Raw>;
+  unique(): UniqueQueryBuilder<Item>;
+  uniqueOrNull(): UniqueOrNullQueryBuilder<Item>;
+  first(): FirstQueryBuilder<Item>;
+  firstOrNull(): FirstOrNullQueryBuilder<Item>;
+  take(count: number): ManyQueryBuilder<Item>;
+  paginate(opts: StreamPaginationOptions): Promise<PaginatedResult<Item>>;
+  many(): ManyQueryBuilder<Item>;
+} & QueryPlanHandle<DataModel, Table>;
+
+// The stream() export of convex-helpers/server/stream. Injected rather than
+// imported so the helpers stay an optional dependency.
+export type StreamFactory = (
+  db: GenericDatabaseReader<any>,
+  schema: SchemaDefinition<any, boolean>,
+) => StreamReader;
+
+// All the runtime needs from a StreamDatabaseReader.
+type StreamReader = { query(table: any): unknown };
+
+export type QueryFacadeOptions = {
+  stream?: StreamFactory;
+};
 
 type TableBatchQueryFacade<
   DataModel extends GenericDataModel,
@@ -1397,6 +1447,7 @@ function createBatchFacade<Item>(
 function createCollectionFacade<Item>(
   db: DbReader<any>,
   plan: QueryPlan,
+  streamDb?: StreamReader,
 ):
   | TableRangeQueryFacade<any, any, Item>
   | TableQueryFacade<any, any, Item> {
@@ -1407,19 +1458,30 @@ function createCollectionFacade<Item>(
       return createCollectionFacade<ExpandWith<Item, Builder>>(
         db,
         withExpander(plan, withBuilder),
+        streamDb,
       );
     },
     order(direction: 'asc' | 'desc') {
       return createCollectionFacade<Item>(
         db,
         withModifier(plan, (query) => query.order(direction)),
+        streamDb,
       );
     },
     filter(filterer: any) {
       return createCollectionFacade<Item>(
         db,
         withModifier(plan, (query) => query.filter(filterer)),
+        streamDb,
       );
+    },
+    stream() {
+      if (!streamDb) {
+        throw new Error(
+          'stream() requires createQueryFacade(db, schema, { stream }) with the stream() export of convex-helpers/server/stream',
+        );
+      }
+      return createStreamFacade<Item>(streamDb as unknown as DbReader<any>, plan);
     },
     unique() {
       return createSingleQueryBuilder(async () => await executeUnique(db, plan), false);
@@ -1447,6 +1509,69 @@ function createCollectionFacade<Item>(
     },
     many() {
       return createManyQueryBuilder(async () => await executeMany(db, plan));
+    },
+  };
+
+  return facade;
+}
+
+// Terminals reuse the plan runtime: a StreamDatabaseReader answers query() /
+// withIndex() / order() like the real reader, and its results add
+// filterWith and maximumRowsRead. order() is applied ahead of any filterWith
+// because a filtered stream can no longer be reordered.
+function createStreamFacade<Item>(
+  streamDb: DbReader<any>,
+  plan: QueryPlan,
+): TableStreamFacade<any, any, Item> {
+  const facade: any = {
+    _plan: plan,
+    _table: plan.source.table,
+    with<Builder extends AnyWithBuilder<Item>>(withBuilder: Builder) {
+      return createStreamFacade<ExpandWith<Item, Builder>>(
+        streamDb,
+        withExpander(plan, withBuilder),
+      );
+    },
+    order(direction: 'asc' | 'desc') {
+      return createStreamFacade<Item>(streamDb, {
+        ...plan,
+        modifiers: [(query) => query.order(direction), ...plan.modifiers],
+      });
+    },
+    filterWith(predicate: (row: unknown) => boolean | Promise<boolean>) {
+      return createStreamFacade<Item>(
+        streamDb,
+        withModifier(plan, (query) =>
+          query.filterWith(async (row: unknown) => await predicate(row)),
+        ),
+      );
+    },
+    unique() {
+      return createSingleQueryBuilder(async () => await executeUnique(streamDb, plan), false);
+    },
+    uniqueOrNull() {
+      return createSingleQueryBuilder(
+        async () => await executeUniqueOrNull(streamDb, plan),
+        true,
+      );
+    },
+    first() {
+      return createSingleQueryBuilder(async () => await executeFirst(streamDb, plan), false);
+    },
+    firstOrNull() {
+      return createSingleQueryBuilder(
+        async () => await executeFirstOrNull(streamDb, plan),
+        true,
+      );
+    },
+    take(count: number) {
+      return createManyQueryBuilder(async () => await executeTake(streamDb, plan, count));
+    },
+    paginate(opts: StreamPaginationOptions) {
+      return executePaginate(streamDb, plan, opts);
+    },
+    many() {
+      return createManyQueryBuilder(async () => await executeMany(streamDb, plan));
     },
   };
 
@@ -1539,8 +1664,9 @@ function createTableNamespace<
   db: DbReader<DataModel>,
   table: Table,
   resolveIndexFields: IndexFieldResolver,
+  streamDb?: StreamReader,
 ): TableNamespace<DataModel, Table> {
-  const rootFacade = createCollectionFacade(db, createQueryPlan(table));
+  const rootFacade = createCollectionFacade(db, createQueryPlan(table), streamDb);
   const target = {
     ...rootFacade,
     find(id: GenericId<Table>) {
@@ -1556,6 +1682,7 @@ function createTableNamespace<
       return createCollectionFacade(
         db,
         createQueryPlan(table, index, selector, resolveIndexFields(table, index)),
+        streamDb,
       );
     },
     through(sourceQuery: unknown, targetField: string) {
@@ -1612,6 +1739,7 @@ function createTableNamespace<
             normalizeIndexSelectorArgs(args),
             resolveIndexFields(table, prop),
           ),
+          streamDb,
         )) as ((...args: unknown[]) => unknown) & {
         in: (values: unknown[]) => unknown;
       };
@@ -1668,8 +1796,10 @@ function createIndexFieldResolver(
 export function createQueryFacade<DataModel extends GenericDataModel>(
   db: GenericDatabaseReader<DataModel>,
   schema: SchemaDefinition<any, boolean>,
+  options: QueryFacadeOptions = {},
 ): QueryFacade<DataModel> {
   const resolveIndexFields = createIndexFieldResolver(schema);
+  const streamDb = options.stream?.(db, schema);
 
   return new Proxy(
     {},
@@ -1682,6 +1812,7 @@ export function createQueryFacade<DataModel extends GenericDataModel>(
           db,
           prop as AppTable<DataModel>,
           resolveIndexFields,
+          streamDb,
         );
       },
     },

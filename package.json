@@ -38,7 +38,8 @@
   },
   "devDependencies": {
     "@types/node": "^24.3.0",
-    "convex": "1.25.4",
+    "convex": "1.43.0",
+    "convex-helpers": "^0.1.104",
     "convex-test": "^0.0.41",
     "tsup": "^8.5.0",
     "typescript": "^5.9.2",
