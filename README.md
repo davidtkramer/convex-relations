@@ -403,9 +403,7 @@ const categories = await q.categories.bySlug
   .many();
 ```
 
-Batch lookups skip missing rows. Like SQL's `IN`, the list is a set: a value
-listed twice matches its rows once, and results follow the order of each
-value's first occurrence.
+Batch lookups skip missing rows and dedupe the values, keeping list order.
 
 ## Relation Expansion with `with(...)`
 
