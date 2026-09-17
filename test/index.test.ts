@@ -513,6 +513,9 @@ describe("convex-relations indexed builders", () => {
           [postId, "approved", firstAuthorId],
         ])
         .many();
+      const byScalarBatch = await q.comments.byPostIdAndStatusAndAuthorId
+        .in([postId])
+        .many();
 
       expect(byOneArg.map((comment) => comment._id)).toEqual([
         firstApprovedId,
@@ -529,6 +532,11 @@ describe("convex-relations indexed builders", () => {
       expect(byBatchPrefix.map((comment) => comment._id)).toEqual([
         pendingId,
         firstApprovedId,
+      ]);
+      expect(byScalarBatch.map((comment) => comment._id)).toEqual([
+        firstApprovedId,
+        secondApprovedId,
+        pendingId,
       ]);
     });
   });

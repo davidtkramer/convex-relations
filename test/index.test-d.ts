@@ -405,6 +405,20 @@ describe("convex-relations type surface", () => {
     const taps = q.activities.byKind.in(["view", "share"]).many();
     expectTypeOf<Awaited<typeof taps>>().toEqualTypeOf<(View | Share)[]>();
 
+    // Batch elements may be readonly, bare values for the leading field, or
+    // readonly prefix tuples.
+    const kinds = ["view", "share"] as const;
+    const fromConst = q.activities.byKind.in(kinds).many();
+    expectTypeOf<Awaited<typeof fromConst>>().toEqualTypeOf<(View | Share)[]>();
+    const scalarPrefix = q.activities.byPostIdAndKind.in([postId]).many();
+    expectTypeOf<Awaited<typeof scalarPrefix>>().toEqualTypeOf<Activity[]>();
+    const tuplePrefix = q.activities.byPostIdAndKind
+      .in(kinds.map((kind) => [postId, kind] as const))
+      .many();
+    expectTypeOf<Awaited<typeof tuplePrefix>>().toEqualTypeOf<(View | Share)[]>();
+    // @ts-expect-error a bare value must fit the leading field
+    q.activities.byPostIdAndKind.in(["view"]);
+
     // Relations attach to the narrowed item.
     const shares = q.activities
       .byKind("share")
